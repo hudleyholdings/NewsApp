@@ -1,0 +1,55 @@
+[
+  {
+    "trigger": {
+      "url-filter": ".*",
+      "if-domain": [
+        "doubleclick.net",
+        "googlesyndication.com",
+        "adsystem.com",
+        "adservice.google.com",
+        "adnxs.com",
+        "scorecardresearch.com"
+      ]
+    },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": {
+      "url-filter": ".*",
+      "if-domain": [
+        "google-analytics.com",
+        "analytics.google.com",
+        "stats.g.doubleclick.net",
+        "segment.com",
+        "segment.io",
+        "mixpanel.com"
+      ]
+    },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": {
+      "url-filter": ".*",
+      "if-domain": [
+        "facebook.com",
+        "connect.facebook.net",
+        "platform.twitter.com",
+        "analytics.twitter.com"
+      ]
+    },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": {
+      "url-filter": ".*",
+      "resource-type": ["image"],
+      "url-filter-is-case-sensitive": false,
+      "if-domain": [
+        "ads",
+        "adservice",
+        "adserver"
+      ]
+    },
+    "action": { "type": "block" }
+  }
+]

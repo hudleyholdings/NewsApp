@@ -1,0 +1,12 @@
+.DS_Store
+.build
+build
+.swiftpm
+
+# Development files
+.claude/
+docs/
+research/
+Resources/TTS/
+FEED_DISCOVERY_PLAN.md
+scripts/check_feeds.py
