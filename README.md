@@ -6,7 +6,7 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 ![Swift 6.2](https://img.shields.io/badge/Swift-6.2-orange)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 
-<!-- Add a screenshot here: ![Screenshot](screenshot.png) -->
+![NewsApp screenshot](screenshot.png)
 
 ## Features
 
