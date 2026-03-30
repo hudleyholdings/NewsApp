@@ -32,7 +32,7 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 
 Grab `NewsApp.app` from the [latest release](../../releases/latest), unzip it, and drag it to your Applications folder.
 
-Since the app isn't signed with an Apple Developer certificate, you'll need to right-click it and choose "Open" the first time, then click "Open" in the dialog.
+Since the app isn't signed with an Apple Developer certificate, macOS will block it on first launch. Go to **System Settings > Privacy & Security**, scroll down, and click **Open Anyway** next to the NewsApp message.
 
 ### Build from source
 
