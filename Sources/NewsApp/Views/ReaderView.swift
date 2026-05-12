@@ -843,8 +843,8 @@ private struct ImagePreviewView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let imageWidth = min(geo.size.width - 40, 1400)
-            let imageHeight = min(geo.size.height - 40, 900)
+            let imageWidth = max(0, geo.size.width - 48)
+            let imageHeight = max(0, geo.size.height - 48)
 
             ZStack {
                 Color.black
@@ -893,7 +893,7 @@ private struct ImagePreviewView: View {
                 }
             }
         }
-        .frame(minWidth: 800, idealWidth: 1200, minHeight: 600, idealHeight: 800)
+        .frame(minWidth: 800, idealWidth: 1500, maxWidth: .infinity, minHeight: 600, idealHeight: 1000, maxHeight: .infinity)
     }
 }
 
