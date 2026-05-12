@@ -29,6 +29,42 @@ final class FeedParserTests: XCTestCase {
         XCTAssertNotNil(result.entries.first?.publishedAt)
     }
 
+    func testRSSNestedMetadataDoesNotOverwriteArticleTitle() throws {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+          <channel>
+            <title>The Keyword</title>
+            <item>
+              <title>Do more and have more fun with the next generation of Android in the car</title>
+              <link>https://blog.google/products-and-platforms/platforms/android/android-in-cars-updates/</link>
+              <media:content url="https://example.com/car.webp" medium="image" />
+              <description><![CDATA[<img src="https://example.com/car.webp">Android Auto summary.]]></description>
+              <pubDate>Tue, 12 May 2026 17:00:00 +0000</pubDate>
+              <guid>https://blog.google/products-and-platforms/platforms/android/android-in-cars-updates/</guid>
+              <og xmlns:og="http://ogp.me/ns#">
+                <type>article</type>
+                <title>Nested Open Graph title should not win</title>
+              </og>
+              <author xmlns:author="http://www.w3.org/2005/Atom">
+                <name>Guemmy Kim</name>
+                <title>Senior Director of Product &amp; User Experience</title>
+                <department>Android for Cars</department>
+              </author>
+            </item>
+          </channel>
+        </rss>
+        """
+
+        let result = try FeedParser().parse(data: Data(xml.utf8), url: URL(string: "https://blog.google/rss/")!)
+        let entry = try XCTUnwrap(result.entries.first)
+
+        XCTAssertEqual(result.title, "The Keyword")
+        XCTAssertEqual(entry.title, "Do more and have more fun with the next generation of Android in the car")
+        XCTAssertEqual(entry.author, "Guemmy Kim")
+        XCTAssertEqual(entry.imageURL, "https://example.com/car.webp")
+    }
+
     func testParsesJSONFeedAuthorsAndFractionalDates() throws {
         let json = """
         {

@@ -85,6 +85,10 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>NewsApp</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>MacOSX</string>
+  </array>
   <key>CFBundleShortVersionString</key>
   <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>

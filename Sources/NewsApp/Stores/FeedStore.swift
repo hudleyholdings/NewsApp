@@ -1117,6 +1117,10 @@ final class FeedStore: ObservableObject {
             let key = entry.externalID
             if let index = lookup[key] {
                 var existing = list[index]
+                let parsedTitle = entry.title.decodingHTMLEntities()
+                if !parsedTitle.isEmpty, parsedTitle != "Untitled", existing.title != parsedTitle {
+                    existing.title = parsedTitle
+                }
                 if existing.summary == nil { existing.summary = entry.summary?.strippingHTML() }
                 if existing.contentHTML == nil { existing.contentHTML = entry.contentHTML }
                 if existing.author == nil { existing.author = entry.author }

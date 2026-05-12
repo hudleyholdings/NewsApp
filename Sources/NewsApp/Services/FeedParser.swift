@@ -77,29 +77,46 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     private(set) var entries: [FeedEntry] = []
     private(set) var feedTitle: String?
 
-    private var currentText: String = ""
+    private var elementStack: [String] = []
+    private var textStack: [String] = []
+    private var elementHasChildStack: [Bool] = []
     private var currentEntry: FeedEntry?
-    private var currentElement: String = ""
     private var isInItem = false
     private var isInEntry = false
+    private var itemRootDepth: Int?
+    private var entryRootDepth: Int?
+    private var authorDepth: Int?
 
     init(dateParser: FeedDateParser) {
         self.dateParser = dateParser
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
-        currentElement = elementName.lowercased()
-        currentText = ""
+        let currentElement = normalizedName(elementName, qualifiedName: qName)
+        if !elementHasChildStack.isEmpty {
+            elementHasChildStack[elementHasChildStack.count - 1] = true
+        }
+        elementStack.append(currentElement)
+        textStack.append("")
+        elementHasChildStack.append(false)
 
         if currentElement == "item" {
             isInItem = true
+            itemRootDepth = elementStack.count
+            authorDepth = nil
             currentEntry = FeedEntry(externalID: "", title: "Untitled", link: nil, summary: nil, contentHTML: nil, author: nil, publishedAt: nil, imageURL: nil)
         } else if currentElement == "entry" {
             isInEntry = true
+            entryRootDepth = elementStack.count
+            authorDepth = nil
             currentEntry = FeedEntry(externalID: "", title: "Untitled", link: nil, summary: nil, contentHTML: nil, author: nil, publishedAt: nil, imageURL: nil)
         }
 
-        if isInItem || isInEntry {
+        if (isInItem || isInEntry), currentElement == "author", isDirectEntryChild {
+            authorDepth = elementStack.count
+        }
+
+        if isInItem || isInEntry, isDirectEntryChild || isMediaElement(currentElement) {
             if currentElement == "link" {
                 if let href = attributeDict["href"], attributeDict["rel"] != "self" {
                     currentEntry?.link = href
@@ -124,33 +141,47 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        currentText += string
+        guard !textStack.isEmpty else { return }
+        textStack[textStack.count - 1] += string
+    }
+
+    func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
+        guard let text = String(data: CDATABlock, encoding: .utf8), !textStack.isEmpty else { return }
+        textStack[textStack.count - 1] += text
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
-        let name = elementName.lowercased()
-        let text = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = normalizedName(elementName, qualifiedName: qName)
+        let depth = elementStack.count
+        let text = (textStack.last ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hadChildren = elementHasChildStack.last ?? false
 
         if isInItem || isInEntry {
-            switch name {
-            case "title":
-                if !text.isEmpty { currentEntry?.title = text }
-            case "link":
-                if currentEntry?.link == nil, !text.isEmpty { currentEntry?.link = text }
-            case "guid", "id":
-                if !text.isEmpty { currentEntry?.externalID = text }
-            case "description", "summary":
-                if !text.isEmpty { currentEntry?.summary = text }
-            case "content", "content:encoded":
-                if !text.isEmpty { currentEntry?.contentHTML = text }
-            case "author", "dc:creator", "name":
+            if isDirectEntryChild(atDepth: depth) {
+                switch name {
+                case "title":
+                    if !text.isEmpty { currentEntry?.title = text }
+                case "link":
+                    if currentEntry?.link == nil, !text.isEmpty { currentEntry?.link = text }
+                case "guid", "id":
+                    if !text.isEmpty { currentEntry?.externalID = text }
+                case "description", "summary":
+                    if !text.isEmpty { currentEntry?.summary = text }
+                case "content", "content:encoded":
+                    if !text.isEmpty { currentEntry?.contentHTML = text }
+                case "author":
+                    if !hadChildren, !text.isEmpty { currentEntry?.author = text }
+                case "dc:creator":
+                    if !text.isEmpty { currentEntry?.author = text }
+                case "pubdate", "published", "updated":
+                    if let date = dateParser.parse(text) { currentEntry?.publishedAt = date }
+                default:
+                    break
+                }
+            } else if let authorDepth, depth == authorDepth + 1, localName(name) == "name" {
                 if !text.isEmpty { currentEntry?.author = text }
-            case "pubdate", "published", "updated":
-                if let date = dateParser.parse(text) { currentEntry?.publishedAt = date }
-            default:
-                break
             }
-        } else if name == "title" {
+        } else if name == "title", parentName == "channel" {
             if !text.isEmpty { feedTitle = text }
         }
 
@@ -163,6 +194,8 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             }
             currentEntry = nil
             isInItem = false
+            itemRootDepth = nil
+            authorDepth = nil
         }
 
         if name == "entry" {
@@ -174,9 +207,56 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             }
             currentEntry = nil
             isInEntry = false
+            entryRootDepth = nil
+            authorDepth = nil
         }
 
-        currentText = ""
+        if let authorDepth, depth == authorDepth, name == "author" {
+            self.authorDepth = nil
+        }
+
+        popElement()
+    }
+
+    private func normalizedName(_ elementName: String, qualifiedName qName: String?) -> String {
+        let name = qName?.isEmpty == false ? qName! : elementName
+        return name.lowercased()
+    }
+
+    private var currentRootDepth: Int? {
+        itemRootDepth ?? entryRootDepth
+    }
+
+    private var isDirectEntryChild: Bool {
+        isDirectEntryChild(atDepth: elementStack.count)
+    }
+
+    private func isDirectEntryChild(atDepth depth: Int) -> Bool {
+        guard let rootDepth = currentRootDepth else { return false }
+        return depth == rootDepth + 1
+    }
+
+    private func isMediaElement(_ name: String) -> Bool {
+        name == "media:content" || name == "media:thumbnail"
+    }
+
+    private var parentName: String? {
+        guard elementStack.count >= 2 else { return nil }
+        return elementStack[elementStack.count - 2]
+    }
+
+    private func localName(_ name: String) -> String {
+        name.split(separator: ":").last.map(String.init) ?? name
+    }
+
+    private func popElement() {
+        guard !elementStack.isEmpty else { return }
+        let rawText = textStack.popLast() ?? ""
+        _ = elementStack.popLast()
+        _ = elementHasChildStack.popLast()
+        if !textStack.isEmpty {
+            textStack[textStack.count - 1] += rawText
+        }
     }
 }
 
