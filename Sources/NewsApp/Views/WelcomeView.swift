@@ -387,7 +387,7 @@ struct WelcomeView: View {
                 Spacer()
 
                 Button("Finish Setup") {
-                    settings.weatherEnabled = settings.weatherLatitude != 0
+                    settings.weatherEnabled = hasSavedWeatherLocation
                     settings.hasCompletedOnboarding = true
                 }
                 .buttonStyle(.borderedProminent)
@@ -397,6 +397,7 @@ struct WelcomeView: View {
             if let location = newLocation {
                 settings.weatherLatitude = location.coordinate.latitude
                 settings.weatherLongitude = location.coordinate.longitude
+                settings.weatherEnabled = true
                 locationManager.reverseGeocode(location) { cityName in
                     if let city = cityName {
                         settings.weatherCity = city
@@ -423,6 +424,10 @@ struct WelcomeView: View {
                 }
             }
         )
+    }
+
+    private var hasSavedWeatherLocation: Bool {
+        !settings.weatherCity.isEmpty || settings.weatherLatitude != 0 || settings.weatherLongitude != 0
     }
 
     private func loadStarterPack() {
@@ -478,6 +483,7 @@ struct WelcomeView: View {
                 settings.weatherCity = name
                 settings.weatherLatitude = lat
                 settings.weatherLongitude = lon
+                settings.weatherEnabled = true
                 citySearchText = ""
             }
         }

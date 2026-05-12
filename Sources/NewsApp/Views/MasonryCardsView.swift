@@ -713,7 +713,8 @@ struct NewspaperCard: View {
                         Text(label)
                             .font(.system(size: settings.scaled(10)))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }

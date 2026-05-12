@@ -125,13 +125,16 @@ struct SettingsView: View {
 
             Section("Preview") {
                 Toggle("Prefer Mobile Site", isOn: $settings.preferMobileSite)
-                Text("Preview pages use private storage with JavaScript disabled so NewsApp never prompts for WebCrypto Keychain access.")
+                Text("Preview pages use private storage with JavaScript disabled. Use Open in Browser for full interactive publisher pages.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section("Weather & Location") {
-                Toggle("Show Weather in Newspaper View", isOn: $settings.weatherEnabled)
+                Toggle("Show Weather", isOn: $settings.weatherEnabled)
+                Text("Shows local weather in the toolbar, Cards view, and TV view.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 if settings.weatherEnabled {
                     Divider()
@@ -199,6 +202,7 @@ struct SettingsView: View {
                                 // Save coordinates
                                 settings.weatherLatitude = location.coordinate.latitude
                                 settings.weatherLongitude = location.coordinate.longitude
+                                settings.weatherEnabled = true
                                 // Reverse geocode to get city name
                                 locationManager.reverseGeocode(location) { cityName in
                                     if let city = cityName {
@@ -328,6 +332,7 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
         }
+        .background(SettingsWindowChromeAccessor())
         .frame(minWidth: 600, idealWidth: 680, maxWidth: 800)
         .frame(minHeight: 600, idealHeight: 700, maxHeight: 900)
         .preferredColorScheme(settings.colorScheme)
@@ -355,8 +360,33 @@ struct SettingsView: View {
                 settings.weatherCity = name
                 settings.weatherLatitude = lat
                 settings.weatherLongitude = lon
+                settings.weatherEnabled = true
                 citySearchText = ""
             }
+        }
+    }
+}
+
+private struct SettingsWindowChromeAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsWindowChromeView {
+        SettingsWindowChromeView()
+    }
+
+    func updateNSView(_ nsView: SettingsWindowChromeView, context: Context) {
+        nsView.applyConfiguration()
+    }
+
+    final class SettingsWindowChromeView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            applyConfiguration()
+        }
+
+        func applyConfiguration() {
+            guard let window else { return }
+            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            window.standardWindowButton(.zoomButton)?.isHidden = true
+            window.styleMask.remove([.miniaturizable, .resizable])
         }
     }
 }

@@ -149,7 +149,8 @@ struct PolymarketReaderView: View {
                     if let label = label, !label.isEmpty {
                         Text(label)
                             .font(.system(size: 18, weight: .semibold))
-                            .lineLimit(2)
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
@@ -223,7 +224,8 @@ struct PolymarketReaderView: View {
                         if let label = label, !label.isEmpty {
                             Text(label)
                                 .font(.system(size: 24, weight: .semibold))
-                                .lineLimit(2)
+                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
 
                         Spacer()
@@ -311,10 +313,23 @@ struct PolymarketReaderView: View {
     @ViewBuilder
     private func multiOutcomeSection(event: PolymarketEvent) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("All Outcomes")
-                .font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Outcome Probabilities")
+                        .font(.headline)
+                    Text("Sorted by current implied Yes probability.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let count = event.markets?.count {
+                    Text("\(count) markets")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
 
-            MultiOutcomeView(event: event, maxOutcomes: 8)
+            MultiOutcomeView(event: event, maxOutcomes: 10, allowsExpansion: true)
         }
         .padding(16)
         .background(Color(nsColor: .controlBackgroundColor))

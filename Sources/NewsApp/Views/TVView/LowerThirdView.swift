@@ -15,6 +15,7 @@ struct LowerThirdView: View {
     let progress: Double
     let totalStories: Int
     let currentIndex: Int
+    var onOpenReader: () -> Void = {}
 
     @EnvironmentObject private var settings: SettingsStore
 
@@ -50,16 +51,21 @@ struct LowerThirdView: View {
                     // Lower third container
                     HStack(alignment: .bottom, spacing: 16) {
                         // Left side: Lower third content
-                        VStack(alignment: .leading, spacing: 0) {
-                            sourceBar
-                                .opacity(showSource ? 1 : 0)
-                                .offset(x: showSource ? 0 : -40)
+                        Button(action: onOpenReader) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                sourceBar
+                                    .opacity(showSource ? 1 : 0)
+                                    .offset(x: showSource ? 0 : -40)
 
-                            // Content area - headline or paragraph
-                            contentArea
-                                .opacity(showHeadline ? 1 : 0)
-                                .offset(y: showHeadline ? 0 : 15)
+                                // Content area - headline or paragraph
+                                contentArea
+                                    .opacity(showHeadline ? 1 : 0)
+                                    .offset(y: showHeadline ? 0 : 15)
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .help("Open article")
                         .frame(maxWidth: geometry.size.width * 0.65, alignment: .leading)
 
                         Spacer(minLength: 16)
@@ -685,7 +691,8 @@ struct TVInfoWidget: View {
             showProgress: true,
             progress: 0.4,
             totalStories: 12,
-            currentIndex: 3
+            currentIndex: 3,
+            onOpenReader: {}
         )
     }
     .frame(width: 1200, height: 700)

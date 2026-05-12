@@ -10,6 +10,8 @@ struct TVView: View {
     @State private var showControls = false
     @State private var controlsTimer: Timer?
     @State private var currentImage: NSImage?
+    @State private var showArticleReader = false
+    @State private var resumePlaybackAfterReader = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -39,7 +41,8 @@ struct TVView: View {
                                 showProgress: settings.tvShowProgress,
                                 progress: viewModel.storyProgress,
                                 totalStories: viewModel.articles.count,
-                                currentIndex: viewModel.currentIndex
+                                currentIndex: viewModel.currentIndex,
+                                onOpenReader: { openCurrentArticleReader() }
                             )
                         }
                     }
@@ -57,6 +60,11 @@ struct TVView: View {
                         )
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
+                }
+
+                if showArticleReader {
+                    readerOverlay(geometry: geometry)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
             }
             .onAppear {
@@ -101,6 +109,28 @@ struct TVView: View {
             }
         }
         .preferredColorScheme(.dark) // TV view always dark for cinematic feel
+    }
+
+    private func readerOverlay(geometry: GeometryProxy) -> some View {
+        let modalWidth = min(max(geometry.size.width * 0.78, 720), 1220)
+        let modalHeight = min(max(geometry.size.height * 0.82, 520), geometry.size.height - 72)
+
+        return ZStack {
+            Color.black.opacity(0.68)
+                .ignoresSafeArea()
+                .onTapGesture { closeArticleReader() }
+
+            ReaderView(
+                onClose: { closeArticleReader() }
+            )
+            .environmentObject(feedStore)
+            .environmentObject(settings)
+            .frame(width: modalWidth, height: modalHeight)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .shadow(color: .black.opacity(0.55), radius: 44, y: 16)
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height)
     }
 
     // MARK: - Story View
@@ -170,6 +200,27 @@ struct TVView: View {
 
         // Initial controls show
         showControlsTemporarily()
+    }
+
+    private func openCurrentArticleReader() {
+        guard let article = viewModel.currentArticle else { return }
+        feedStore.selectedArticleID = article.id
+        resumePlaybackAfterReader = viewModel.isPlaying
+        viewModel.pause()
+        withAnimation(.easeOut(duration: 0.18)) {
+            showArticleReader = true
+            showControls = false
+        }
+    }
+
+    private func closeArticleReader() {
+        withAnimation(.easeOut(duration: 0.16)) {
+            showArticleReader = false
+        }
+        if resumePlaybackAfterReader {
+            viewModel.resume()
+        }
+        resumePlaybackAfterReader = false
     }
 
     private func showControlsTemporarily() {
@@ -254,6 +305,17 @@ final class TVViewModel: ObservableObject {
         } else {
             progressTimer?.invalidate()
         }
+    }
+
+    func pause() {
+        isPlaying = false
+        progressTimer?.invalidate()
+    }
+
+    func resume() {
+        guard !articles.isEmpty else { return }
+        isPlaying = true
+        startProgressTimer()
     }
 
     func nextStory() {

@@ -320,8 +320,26 @@ private struct GDELTSourceForm: View {
                     .textFieldStyle(.roundedBorder)
             }
 
-            DisclosureGroup("Advanced Options", isExpanded: $showAdvanced) {
-                VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showAdvanced.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .rotationEffect(.degrees(showAdvanced ? 90 : 0))
+                        Text("Advanced Options")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if showAdvanced {
+                    VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Language")
@@ -371,6 +389,8 @@ private struct GDELTSourceForm: View {
                     }
                 }
                 .padding(.top, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                }
             }
 
             HStack {
@@ -465,7 +485,7 @@ private struct PolymarketSourceForm: View {
 
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Category")
+                    Text("Market Category")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Picker("Category", selection: $categoryIndex) {
@@ -491,6 +511,10 @@ private struct PolymarketSourceForm: View {
                 }
             }
 
+            Text("Market Category filters Polymarket's public market tags. Sidebar Group below only controls where this source appears in NewsApp.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Display Name (optional)")
                     .font(.subheadline)
@@ -500,11 +524,14 @@ private struct PolymarketSourceForm: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Category (optional)")
+                Text("Sidebar Group (optional)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                TextField("e.g. Predictions, Markets", text: $category)
+                TextField("e.g. Predictions", text: $category)
                     .textFieldStyle(.roundedBorder)
+                Text("Freeform folder label in NewsApp. Leave blank to use Predictions.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
             // Preview of what will be added

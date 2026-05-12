@@ -90,10 +90,13 @@ struct PriceChangeView: View {
 struct MultiOutcomeView: View {
     let event: PolymarketEvent
     let maxOutcomes: Int
+    let allowsExpansion: Bool
+    @State private var showAllOutcomes = false
 
-    init(event: PolymarketEvent, maxOutcomes: Int = 5) {
+    init(event: PolymarketEvent, maxOutcomes: Int = 5, allowsExpansion: Bool = true) {
         self.event = event
         self.maxOutcomes = maxOutcomes
+        self.allowsExpansion = allowsExpansion
     }
 
     private var sortedMarkets: [(market: PolymarketMarket, probability: Double, label: String)] {
@@ -118,46 +121,96 @@ struct MultiOutcomeView: View {
             return (market, prob, label)
         }
         .sorted { $0.1 > $1.1 }
-        .prefix(maxOutcomes)
         .map { ($0.0, $0.1, $0.2) }
     }
 
+    private var displayedMarkets: [(market: PolymarketMarket, probability: Double, label: String)] {
+        if showAllOutcomes {
+            return sortedMarkets
+        }
+        return Array(sortedMarkets.prefix(maxOutcomes))
+    }
+
+    private var hiddenOutcomeCount: Int {
+        max(0, sortedMarkets.count - maxOutcomes)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(sortedMarkets.enumerated()), id: \.offset) { index, item in
-                HStack(spacing: 10) {
-                    // Probability with colored background
-                    Text("\(Int(item.probability * 100))%")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 26)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(barColor(for: index, isLeading: index == 0))
-                        )
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(displayedMarkets.enumerated()), id: \.offset) { index, item in
+                outcomeRow(item: item, index: index)
+            }
 
-                    // Probability bar
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.secondary.opacity(0.12))
-
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(barColor(for: index, isLeading: index == 0).opacity(0.6))
-                                .frame(width: geo.size.width * item.probability)
-                        }
+            if allowsExpansion && sortedMarkets.count > maxOutcomes {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showAllOutcomes.toggle()
                     }
-                    .frame(height: 26)
-
-                    // Label
-                    Text(item.label)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                        .foregroundStyle(.primary)
-                        .frame(minWidth: 80, alignment: .leading)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: showAllOutcomes ? "chevron.up" : "chevron.down")
+                        Text(showAllOutcomes ? "Show fewer outcomes" : "Show \(hiddenOutcomeCount) more outcomes")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
+                .buttonStyle(.plain)
             }
         }
+    }
+
+    private func outcomeRow(item: (market: PolymarketMarket, probability: Double, label: String), index: Int) -> some View {
+        let color = barColor(for: index, isLeading: index == 0)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("\(Int(item.probability * 100))%")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(width: 48, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(color)
+                    )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.label)
+                        .font(.system(size: 13, weight: index == 0 ? .semibold : .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+
+                    Text("Current Yes probability")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.secondary.opacity(0.12))
+
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color.opacity(0.75))
+                        .frame(width: geo.size.width * item.probability)
+                }
+            }
+            .frame(height: 6)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(index == 0 ? color.opacity(0.10) : Color.secondary.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(index == 0 ? color.opacity(0.24) : Color.secondary.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private func barColor(for index: Int, isLeading: Bool) -> Color {
@@ -299,7 +352,7 @@ struct MarketDetailCard: View {
                 Text("Top Outcomes")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                MultiOutcomeView(event: event, maxOutcomes: 4)
+                MultiOutcomeView(event: event, maxOutcomes: 4, allowsExpansion: false)
             }
 
             // Stats row
