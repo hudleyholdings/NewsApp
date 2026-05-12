@@ -10,6 +10,7 @@ struct MainSplitView: View {
     @State private var showReaderPane = true
     @State private var isReaderExpanded = false
     @State private var focusedPane: FocusedPane = .articleList
+    @State private var previewImageURL: URL?
     @State private var keyMonitor: Any?
 
     enum FocusedPane: Equatable {
@@ -67,6 +68,7 @@ struct MainSplitView: View {
             Text(headerTitle)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
+                .allowsHitTesting(false)
 
             Divider().frame(height: 16)
 
@@ -163,11 +165,6 @@ struct MainSplitView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .focusable(isMainView)
-        .onKeyPress { key in
-            guard isMainView else { return .ignored }
-            return handleKeyPress(key)
-        }
         .animation(.easeInOut(duration: 0.2), value: showReaderPane)
         .frame(minWidth: showReaderPane ? 1180 : 720, minHeight: 680)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -181,84 +178,6 @@ struct MainSplitView: View {
 
     private var hasRadioFavorites: Bool {
         !RadioStore.shared.favorites.isEmpty
-    }
-
-    private func handleKeyPress(_ key: KeyPress) -> KeyPress.Result {
-        // Tab / Shift+Tab: cycle panes
-        if key.key == .tab {
-            if key.modifiers.contains(.shift) {
-                moveFocusLeft()
-            } else {
-                moveFocusRight()
-            }
-            return .handled
-        }
-
-        // Arrow keys handled by NSEvent monitor; handle remaining keys here
-        switch key.key {
-        case .return:
-            handleEnter()
-            return .handled
-        case .escape:
-            handleEscape()
-            return .handled
-        case .space:
-            handleSpace()
-            return .handled
-        default:
-            break
-        }
-
-        // Single-character keys (vim nav + actions)
-        let char = key.characters.lowercased()
-        switch char {
-        case "k":
-            navigateUp()
-            return .handled
-        case "j":
-            navigateDown()
-            return .handled
-        case "h":
-            moveFocusLeft()
-            return .handled
-        case "l":
-            moveFocusRight()
-            return .handled
-        case "s":
-            feedStore.toggleStarCurrentArticle()
-            return .handled
-        case "u":
-            feedStore.toggleReadCurrentArticle()
-            return .handled
-        case "o":
-            feedStore.openCurrentArticleInBrowser()
-            return .handled
-        case "r":
-            Task { await feedStore.refreshAll() }
-            return .handled
-        case "1":
-            showingNewspaper = false
-            showingTVView = false
-            return .handled
-        case "2":
-            showingTVView = false
-            showingNewspaper = true
-            return .handled
-        case "3":
-            showingNewspaper = false
-            showingTVView = true
-            return .handled
-        default:
-            break
-        }
-
-        // Shift+A: mark all as read
-        if char == "a" && key.modifiers.contains(.shift) {
-            feedStore.markAllAsRead(for: feedStore.selectedSidebarItem)
-            return .handled
-        }
-
-        return .ignored
     }
 
     private func moveFocusLeft() {
@@ -355,6 +274,92 @@ struct MainSplitView: View {
         }
     }
 
+    private func handleKeyboardEvent(_ event: NSEvent) -> Bool {
+        if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            return false
+        }
+
+        if previewImageURL != nil {
+            if event.keyCode == 53 {
+                previewImageURL = nil
+                return true
+            }
+            return false
+        }
+
+        guard isMainView else { return false }
+
+        switch event.keyCode {
+        case 48: // tab
+            if event.modifierFlags.contains(.shift) {
+                moveFocusLeft()
+            } else {
+                moveFocusRight()
+            }
+            return true
+        case 36, 76: // return, keypad enter
+            handleEnter()
+            return true
+        case 53: // escape
+            handleEscape()
+            return true
+        case 49: // space
+            handleSpace()
+            return true
+        case 123: // left arrow
+            moveFocusLeft()
+            return true
+        case 124: // right arrow
+            moveFocusRight()
+            return true
+        case 125: // down arrow
+            navigateDown()
+            return true
+        case 126: // up arrow
+            navigateUp()
+            return true
+        default:
+            break
+        }
+
+        let char = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if char == "a", event.modifierFlags.contains(.shift) {
+            feedStore.markAllAsRead(for: feedStore.selectedSidebarItem)
+            return true
+        }
+
+        switch char {
+        case "k":
+            navigateUp()
+        case "j":
+            navigateDown()
+        case "h":
+            moveFocusLeft()
+        case "l":
+            moveFocusRight()
+        case "s":
+            feedStore.toggleStarCurrentArticle()
+        case "u":
+            feedStore.toggleReadCurrentArticle()
+        case "o":
+            feedStore.openCurrentArticleInBrowser()
+        case "r":
+            Task { await feedStore.refreshAll() }
+        case "1":
+            showingNewspaper = false
+            showingTVView = false
+        case "2":
+            showingTVView = false
+            showingNewspaper = true
+        case "3":
+            showingNewspaper = false
+            showingTVView = true
+        default:
+            return false
+        }
+        return true
+    }
+
     // Overlay views rendered outside NavigationStack
     @ViewBuilder
     private var overlayViews: some View {
@@ -393,6 +398,16 @@ struct MainSplitView: View {
         }
     }
 
+    @ViewBuilder
+    private var imagePreviewOverlay: some View {
+        if let previewImageURL {
+            FullWindowImagePreview(url: previewImageURL) {
+                self.previewImageURL = nil
+            }
+            .transition(.opacity)
+        }
+    }
+
     private var hasOverlay: Bool {
         showingTVView || showingNewspaper || isReaderExpanded
     }
@@ -413,6 +428,7 @@ struct MainSplitView: View {
                     }
                 }
                 .overlay { feedManagerOverlay }
+                .overlay { imagePreviewOverlay }
                 .toolbar { unifiedToolbarContent }
                 .modifier(ToolbarBackgroundModifier())
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -439,6 +455,10 @@ struct MainSplitView: View {
         .onReceive(NotificationCenter.default.publisher(for: .refreshAllFeeds)) { _ in
             Task { await feedStore.refreshAll() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .previewReaderImage)) { notification in
+            guard let url = notification.object as? URL else { return }
+            previewImageURL = url
+        }
         .onReceive(NotificationCenter.default.publisher(for: .increaseFontSize)) { _ in
             settings.typeScale = min(settings.typeScale + 0.1, 3.5)
         }
@@ -447,28 +467,12 @@ struct MainSplitView: View {
         }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                guard isMainView else { return event }
                 // Don't intercept when a text field or search field has focus
                 if let responder = event.window?.firstResponder,
                    responder is NSTextView || responder is NSTextField {
                     return event
                 }
-                switch event.keyCode {
-                case 123: // left arrow
-                    moveFocusLeft()
-                    return nil
-                case 124: // right arrow
-                    moveFocusRight()
-                    return nil
-                case 125: // down arrow
-                    navigateDown()
-                    return nil
-                case 126: // up arrow
-                    navigateUp()
-                    return nil
-                default:
-                    return event
-                }
+                return handleKeyboardEvent(event) ? nil : event
             }
         }
         .onDisappear {
@@ -477,6 +481,73 @@ struct MainSplitView: View {
                 keyMonitor = nil
             }
         }
+    }
+}
+
+private struct FullWindowImagePreview: View {
+    let url: URL
+    let onClose: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let horizontalInset = min(max(proxy.size.width * 0.03, 24), 56)
+            let verticalInset = min(max(proxy.size.height * 0.035, 24), 48)
+            let imageWidth = max(160, proxy.size.width - horizontalInset * 2)
+            let imageHeight = max(160, proxy.size.height - verticalInset * 2)
+
+            ZStack {
+                Color.black.opacity(0.96)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onClose)
+
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: imageWidth, maxHeight: imageHeight)
+                            .contentShape(Rectangle())
+                            .onTapGesture { }
+                    case .failure:
+                        VStack(spacing: 10) {
+                            Image(systemName: "photo")
+                                .font(.system(size: 40, weight: .regular))
+                            Text("Failed to load image")
+                                .font(.headline)
+                        }
+                        .foregroundStyle(.white.opacity(0.72))
+                    case .empty:
+                        ProgressView()
+                            .tint(.white)
+                            .controlSize(.large)
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: onClose) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 30, weight: .semibold))
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.white.opacity(0.9))
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .padding(.top, 18)
+                        .padding(.trailing, 20)
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.96))
     }
 }
 

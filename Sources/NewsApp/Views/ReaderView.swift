@@ -496,7 +496,6 @@ struct ReaderTextView: View {
     let horizontalMargin: CGFloat
     @Binding var progress: Double
     var onScroll: ((CGFloat) -> Void)?
-    @State private var imagePreview: ImagePreviewItem?
     @State private var scrollOffset: CGFloat = 0
     @State private var contentHeight: CGFloat = 1
     @State private var viewportHeight: CGFloat = 1
@@ -515,7 +514,7 @@ struct ReaderTextView: View {
                         .frame(width: 0, height: 0)
                     if let imageURL = article.imageURL {
                         Button {
-                            imagePreview = ImagePreviewItem(url: imageURL)
+                            NotificationCenter.default.post(name: .previewReaderImage, object: imageURL)
                         } label: {
                             AsyncImage(url: imageURL) { image in
                                 image.resizable().scaledToFit()
@@ -616,9 +615,6 @@ struct ReaderTextView: View {
             }
         }
         .textSelection(.enabled)
-        .sheet(item: $imagePreview) { item in
-            ImagePreviewView(url: item.url)
-        }
         .background(readerBackground)
         .task(id: renderRequest(htmlContent: htmlContent)) {
             guard let htmlContent = htmlContent, !htmlContent.isEmpty else {
@@ -829,71 +825,6 @@ private struct ReaderContentHeightKey: PreferenceKey {
     nonisolated(unsafe) static var defaultValue: CGFloat = 1
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
-    }
-}
-
-private struct ImagePreviewItem: Identifiable {
-    let id = UUID()
-    let url: URL
-}
-
-private struct ImagePreviewView: View {
-    @Environment(\.dismiss) private var dismiss
-    let url: URL
-
-    var body: some View {
-        GeometryReader { geo in
-            let imageWidth = max(0, geo.size.width - 48)
-            let imageHeight = max(0, geo.size.height - 48)
-
-            ZStack {
-                Color.black
-                    .ignoresSafeArea()
-                    .onTapGesture { dismiss() }
-
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: imageWidth, maxHeight: imageHeight)
-                            .onTapGesture { }
-                    case .failure:
-                        VStack {
-                            Image(systemName: "photo")
-                                .font(.largeTitle)
-                            Text("Failed to load image")
-                        }
-                        .foregroundStyle(.secondary)
-                    case .empty:
-                        ProgressView()
-                            .tint(.white)
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
-                .frame(width: geo.size.width, height: geo.size.height)
-
-                // Close button
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button {
-                            dismiss()
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 28, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.9))
-                        }
-                        .buttonStyle(.plain)
-                        .padding(20)
-                    }
-                    Spacer()
-                }
-            }
-        }
-        .frame(minWidth: 800, idealWidth: 1500, maxWidth: .infinity, minHeight: 600, idealHeight: 1000, maxHeight: .infinity)
     }
 }
 

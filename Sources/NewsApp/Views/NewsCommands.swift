@@ -36,4 +36,5 @@ extension Notification.Name {
     static let increaseFontSize = Notification.Name("increaseFontSize")
     static let decreaseFontSize = Notification.Name("decreaseFontSize")
     static let scrollReader = Notification.Name("scrollReader")
+    static let previewReaderImage = Notification.Name("previewReaderImage")
 }
