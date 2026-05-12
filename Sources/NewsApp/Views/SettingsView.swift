@@ -137,8 +137,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
                 if settings.weatherEnabled {
-                    Divider()
-
                     // Location method picker
                     Picker("Location Source", selection: useLocationBinding) {
                         Text("Enter City Manually").tag(false)
