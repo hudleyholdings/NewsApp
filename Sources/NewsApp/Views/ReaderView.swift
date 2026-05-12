@@ -713,6 +713,7 @@ struct ReaderTextView: View {
         guard let attributed = try? NSMutableAttributedString(data: data, options: options, documentAttributes: nil) else {
             return nil
         }
+        removeAttachmentPlaceholders(from: attributed)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = lineSpacing
         paragraphStyle.paragraphSpacing = 3  // Spacing after paragraphs
@@ -728,8 +729,26 @@ struct ReaderTextView: View {
         return swiftString
     }
 
+    nonisolated private static func removeAttachmentPlaceholders(from attributed: NSMutableAttributedString) {
+        var attachmentRanges: [NSRange] = []
+        attributed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributed.length), options: []) { value, range, _ in
+            if value != nil {
+                attachmentRanges.append(range)
+            }
+        }
+        for range in attachmentRanges.reversed() {
+            attributed.deleteCharacters(in: range)
+        }
+
+        while true {
+            let range = (attributed.string as NSString).range(of: "\u{FFFC}")
+            guard range.location != NSNotFound else { break }
+            attributed.deleteCharacters(in: range)
+        }
+    }
+
     nonisolated private static func normalizeHTML(_ html: String) -> String {
-        var output = html
+        var output = ReaderHTMLSanitizer.sanitizeFragment(html)
 
         // Normalize all BR tags to consistent format first
         output = output.replacingOccurrences(of: "<br />", with: "<br/>", options: .caseInsensitive)

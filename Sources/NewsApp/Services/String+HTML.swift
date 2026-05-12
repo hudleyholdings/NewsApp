@@ -28,8 +28,9 @@ extension String {
     func sanitizingProblematicCharacters() -> String {
         var result = self
 
-        // Remove Unicode replacement character and other problematic sequences
+        // Remove Unicode replacement/object characters and other problematic sequences
         result = result.replacingOccurrences(of: "\u{FFFD}", with: "") // Replacement character
+        result = result.replacingOccurrences(of: "\u{FFFC}", with: "") // Object replacement character
         result = result.replacingOccurrences(of: "\u{25CA}", with: "") // Lozenge (◊)
 
         // Remove isolated surrogate halves and other invalid sequences
@@ -41,8 +42,8 @@ extension String {
                 if value >= 0xD800 && value <= 0xDFFF { return false }
                 // Filter out private use area placeholders that render as boxes
                 if value >= 0xE000 && value <= 0xF8FF { return false }
-                // Filter out specials block except for valid characters
-                if value >= 0xFFF0 && value <= 0xFFFF && value != 0xFFFC { return false }
+                // Filter out specials block placeholders that render as boxes
+                if value >= 0xFFF0 && value <= 0xFFFF { return false }
                 return true
             }
             .map { String($0) }

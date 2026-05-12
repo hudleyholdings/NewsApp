@@ -45,7 +45,8 @@ final class ReaderExtractor {
         }) ?? []
         let paragraphHTML = (try? paragraphElements.compactMap { element -> String? in
             let html = try element.html().trimmingCharacters(in: .whitespacesAndNewlines)
-            return html.isEmpty ? nil : html
+            let sanitized = ReaderHTMLSanitizer.sanitizeFragment(html)
+            return sanitized.isEmpty ? nil : sanitized
         }) ?? []
 
         let text: String
