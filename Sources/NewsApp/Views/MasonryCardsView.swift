@@ -951,7 +951,7 @@ final class ImagePrefetcher: ObservableObject {
             if let image = NSImage(data: data) {
                 queue.sync {
                     self.cache.setObject(image, forKey: url as NSURL, cost: data.count)
-                    self.inFlightURLs.remove(url)
+                    _ = self.inFlightURLs.remove(url)
                 }
                 await MainActor.run {
                     self.loadedCount += 1
@@ -959,12 +959,12 @@ final class ImagePrefetcher: ObservableObject {
             } else {
                 queue.sync {
                     self.failedURLs.insert(url)
-                    self.inFlightURLs.remove(url)
+                    _ = self.inFlightURLs.remove(url)
                 }
             }
         } catch {
             queue.sync {
-                self.inFlightURLs.remove(url)
+                _ = self.inFlightURLs.remove(url)
             }
         }
     }
@@ -1011,7 +1011,7 @@ final class ImagePrefetcher: ObservableObject {
 
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
-            queue.sync { inFlightURLs.remove(url) }
+            queue.sync { _ = inFlightURLs.remove(url) }
 
             if let image = NSImage(data: data) {
                 queue.sync {
@@ -1020,10 +1020,10 @@ final class ImagePrefetcher: ObservableObject {
                 loadedCount += 1
                 return image
             } else {
-                queue.sync { failedURLs.insert(url) }
+                queue.sync { _ = failedURLs.insert(url) }
             }
         } catch {
-            queue.sync { inFlightURLs.remove(url) }
+            queue.sync { _ = inFlightURLs.remove(url) }
         }
         return nil
     }

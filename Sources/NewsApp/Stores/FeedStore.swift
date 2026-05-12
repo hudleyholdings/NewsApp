@@ -11,9 +11,7 @@ final class FeedStore: ObservableObject {
     @Published var articlesByFeed: [UUID: [Article]] = [:] {
         didSet { invalidateArticleCache() }
     }
-    @Published var selectedSidebarItem: SidebarSelection? = .list(FeedStore.allFeedsID) {
-        didSet { markAllAsRead(for: selectedSidebarItem) }
-    }
+    @Published var selectedSidebarItem: SidebarSelection? = .list(FeedStore.allFeedsID)
     @Published var selectedArticleID: UUID?
     @Published var isRefreshing: Bool = false
     @Published var statusMessage: String?
@@ -207,7 +205,7 @@ final class FeedStore: ObservableObject {
             }
 
             // Process results and start new tasks as others complete
-            for await result in group {
+            for await _ in group {
                 activeTasks -= 1
                 completedFeeds += 1
 
@@ -537,19 +535,8 @@ final class FeedStore: ObservableObject {
 
         do {
             let entries = try await polymarketService.fetchEntries(config: config)
-            let newArticles = entries.map { entry in
-                Article(
-                    feedID: feedID,
-                    externalID: entry.externalID,
-                    title: entry.title,
-                    summary: entry.summary,
-                    contentHTML: entry.contentHTML,
-                    link: entry.link.flatMap { URL(string: $0) },
-                    author: entry.author,
-                    publishedAt: entry.publishedAt,
-                    imageURL: entry.imageURL.flatMap { URL(string: $0) }
-                )
-            }
+            let existing = articlesByFeed[feedID] ?? []
+            let newArticles = merge(entries: entries, existing: existing, feed: feeds[index])
 
             // Update cache and UI
             if polymarketSortCache[feedID] == nil {
@@ -754,6 +741,13 @@ final class FeedStore: ObservableObject {
     }
 
     func importOPML(from url: URL) -> Int {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
         guard let data = try? Data(contentsOf: url) else { return 0 }
         let imported = opmlService.parse(data: data)
         guard !imported.isEmpty else { return 0 }
@@ -1152,8 +1146,13 @@ final class FeedStore: ObservableObject {
         // Cap at 500 articles per feed, but always keep starred ones
         if list.count > 500 {
             let starred = list.filter { $0.isStarred }
-            let unstarred = list.filter { !$0.isStarred }.prefix(500 - starred.count)
-            list = starred + unstarred
+            if starred.count >= 500 {
+                list = starred
+            } else {
+                let unstarredLimit = 500 - starred.count
+                let unstarred = list.filter { !$0.isStarred }.prefix(unstarredLimit)
+                list = starred + unstarred
+            }
             list.sort { ($0.publishedAt ?? $0.addedAt) > ($1.publishedAt ?? $1.addedAt) }
         }
         return list

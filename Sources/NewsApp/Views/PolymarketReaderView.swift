@@ -390,7 +390,7 @@ struct PolymarketReaderView: View {
             } label: {
                 HStack {
                     Image(systemName: "arrow.up.right.square.fill")
-                    Text("Trade on Polymarket")
+                    Text("Open Source Page")
                 }
                 .font(.headline)
                 .frame(maxWidth: .infinity)

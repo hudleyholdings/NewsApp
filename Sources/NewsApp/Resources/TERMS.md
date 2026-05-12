@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Last Updated:** February 2026
+**Last Updated:** May 2026
 
 ## Acceptance of Terms
 
@@ -11,7 +11,7 @@ By downloading, installing, or using NewsApp ("the App"), you agree to these Ter
 NewsApp is a local RSS reader and news aggregator application for macOS. The App allows you to:
 - Subscribe to RSS/Atom feeds from websites
 - Aggregate news from the GDELT Project
-- View prediction market data from Polymarket
+- View public prediction-market data from Polymarket
 - Organize and read articles offline
 
 ## User Responsibilities
@@ -45,6 +45,7 @@ Polymarket data is provided for **informational purposes only**. This is:
 - **Not financial advice**
 - **Not investment advice**
 - **Not an endorsement** of prediction markets or gambling
+- **Not a trading, wagering, account, or transaction service**
 
 Prediction markets may be subject to legal restrictions in your jurisdiction. You are responsible for understanding and complying with applicable laws.
 

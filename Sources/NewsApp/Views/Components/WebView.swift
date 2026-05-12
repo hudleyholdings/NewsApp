@@ -5,14 +5,14 @@ struct WebView: NSViewRepresentable {
     let url: URL?
     let blockAds: Bool
     let userAgent: String?
-    let persistentSession: Bool
     var onScroll: ((CGFloat) -> Void)?
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
         let webView = makeWebView()
         context.coordinator.webView = webView
-        context.coordinator.currentMode = (persistentSession, blockAds, userAgent)
+        webView.navigationDelegate = context.coordinator
+        context.coordinator.currentMode = (blockAds, userAgent)
         context.coordinator.onScroll = onScroll
         context.coordinator.observeScroll(in: webView)
         context.coordinator.observeReaderScroll()
@@ -28,7 +28,7 @@ struct WebView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        let signature = (persistentSession, blockAds, userAgent)
+        let signature = (blockAds, userAgent)
         context.coordinator.onScroll = onScroll
         if context.coordinator.currentMode != signature {
             context.coordinator.currentMode = signature
@@ -48,7 +48,9 @@ struct WebView: NSViewRepresentable {
     @MainActor
     private func makeWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = persistentSession ? .default() : .nonPersistent()
+        config.websiteDataStore = .nonPersistent()
+        config.defaultWebpagePreferences.allowsContentJavaScript = false
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = userAgent
         webView.allowsBackForwardNavigationGestures = true
@@ -63,6 +65,7 @@ struct WebView: NSViewRepresentable {
         coordinator.webView?.removeFromSuperview()
         let newWebView = makeWebView()
         coordinator.webView = newWebView
+        newWebView.navigationDelegate = coordinator
         coordinator.observeScroll(in: newWebView)
         container.addSubview(newWebView)
         newWebView.translatesAutoresizingMaskIntoConstraints = false
@@ -79,11 +82,11 @@ struct WebView: NSViewRepresentable {
 }
 
 @MainActor
-final class Coordinator {
-    var currentMode: (Bool, Bool, String?) = (false, false, nil)
+final class Coordinator: NSObject, WKNavigationDelegate {
+    var currentMode: (Bool, String?) = (false, nil)
     weak var webView: WKWebView?
     var onScroll: ((CGFloat) -> Void)?
-    private var scrollObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var scrollObserver: NSObjectProtocol?
 
     // Note: scrollObserver is automatically removed when NotificationCenter deallocates it
 
@@ -104,23 +107,41 @@ final class Coordinator {
             object: contentView,
             queue: .main
         ) { [weak self, weak contentView] _ in
-            guard let self, let contentView else { return }
-            self.onScroll?(contentView.bounds.origin.y)
+            Task { @MainActor in
+                guard let self, let contentView else { return }
+                self.onScroll?(contentView.bounds.origin.y)
+            }
         }
         contentView.postsBoundsChangedNotifications = true
     }
 
-    private var readerScrollObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var readerScrollObserver: NSObjectProtocol?
 
     func observeReaderScroll() {
+        if let readerScrollObserver {
+            NotificationCenter.default.removeObserver(readerScrollObserver)
+        }
+
         readerScrollObserver = NotificationCenter.default.addObserver(
             forName: .scrollReader, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, let webView = self.webView else { return }
             let direction = (note.userInfo?["direction"] as? Int) ?? 1
             let delta = direction * 80
-            webView.evaluateJavaScript("window.scrollBy({top: \(delta), behavior: 'smooth'})")
+            Task { @MainActor in
+                guard let self, let webView = self.webView else { return }
+                _ = try? await webView.evaluateJavaScript("window.scrollBy({top: \(delta), behavior: 'smooth'})")
+            }
         }
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        preferences: WKWebpagePreferences,
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy, WKWebpagePreferences) -> Void
+    ) {
+        preferences.allowsContentJavaScript = false
+        decisionHandler(.allow, preferences)
     }
 
     private func findScrollView(in view: NSView) -> NSScrollView? {
@@ -136,5 +157,14 @@ final class Coordinator {
             }
         }
         return nil
+    }
+
+    deinit {
+        if let scrollObserver {
+            NotificationCenter.default.removeObserver(scrollObserver)
+        }
+        if let readerScrollObserver {
+            NotificationCenter.default.removeObserver(readerScrollObserver)
+        }
     }
 }

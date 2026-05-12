@@ -55,7 +55,6 @@ final class SettingsStore: ObservableObject {
     @AppStorage("blockAdsEnabled") var blockAdsEnabled: Bool = true
     @AppStorage("cacheImagesEnabled") var cacheImagesEnabled: Bool = true
     @AppStorage("preferMobileSite") var preferMobileSite: Bool = false
-    @AppStorage("persistentWebSessions") var persistentWebSessions: Bool = false
 
     // Weather & Location
     @AppStorage("weatherEnabled") var weatherEnabled: Bool = false
@@ -295,7 +294,7 @@ enum ReaderDisplayMode: String, CaseIterable, Identifiable, Codable {
     var label: String {
         switch self {
         case .reader: return "Reader"
-        case .web: return "Web"
+        case .web: return "Preview"
         }
     }
 }

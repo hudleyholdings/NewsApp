@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct NewsAppApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var feedStore = FeedStore()
     @StateObject private var settings = SettingsStore()
 
@@ -31,6 +32,20 @@ struct NewsAppApp: App {
             SettingsView()
                 .environmentObject(settings)
         }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        true
+    }
+
+    func applicationShouldSaveApplicationState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldRestoreApplicationState(_ app: NSApplication) -> Bool {
+        false
     }
 }
 
@@ -70,7 +85,11 @@ struct WindowAccessor: NSViewRepresentable {
             // NSWindow.didUpdateNotification fires during toolbar rebuilds
             updateObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.didUpdateNotification, object: window, queue: .main
-            ) { [weak self] _ in self?.applyConfiguration() }
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.applyConfiguration()
+                }
+            }
         }
 
         private func stopEnforcement() {

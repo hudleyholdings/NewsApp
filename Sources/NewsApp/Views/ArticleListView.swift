@@ -5,6 +5,7 @@ struct ArticleListView: View {
     @EnvironmentObject private var feedStore: FeedStore
     @EnvironmentObject private var settings: SettingsStore
     @State private var visibleCount = 120
+    private let topAnchorID = "article-list-top-anchor"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,6 +56,8 @@ struct ArticleListView: View {
         let showSource = feedStore.selectedSidebarItem?.listID != nil
         return ScrollViewReader { proxy in
         List(selection: $feedStore.selectedArticleID) {
+            topScrollAnchor
+
             if settings.articleListStyle == .newspaper {
                 ForEach(Array(articles.enumerated()), id: \.element.id) { index, article in
                     ArticleRow(article: article, feedName: feedStore.feedName(for: article.feedID), isLead: index == 0, style: .newspaper, showSource: showSource)
@@ -98,11 +101,23 @@ struct ArticleListView: View {
             }
         }
         .id(feedStore.selectedSidebarItem)
+        .onAppear {
+            scrollToTop(proxy, animated: false)
+        }
         .onChange(of: feedStore.selectedSidebarItem) { _, _ in
             visibleCount = 120
+            feedStore.selectedArticleID = nil
+            scrollToTop(proxy, animated: false)
         }
         .onChange(of: feedStore.searchText) { _, _ in
             visibleCount = 120
+            feedStore.selectedArticleID = nil
+            scrollToTop(proxy, animated: false)
+        }
+        .onChange(of: articles.first?.id) { _, _ in
+            if feedStore.selectedArticleID == nil {
+                scrollToTop(proxy, animated: false)
+            }
         }
         .onChange(of: feedStore.selectedArticleID) { _, newValue in
             if let newValue {
@@ -111,6 +126,31 @@ struct ArticleListView: View {
         }
         .frame(maxHeight: .infinity)
         } // ScrollViewReader
+    }
+
+    private var topScrollAnchor: some View {
+        Color.clear
+            .frame(height: 12)
+            .id(topAnchorID)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .accessibilityHidden(true)
+    }
+
+    private func scrollToTop(_ proxy: ScrollViewProxy, animated: Bool) {
+        DispatchQueue.main.async {
+            let action = {
+                proxy.scrollTo(topAnchorID, anchor: .top)
+            }
+            if animated {
+                withAnimation(.easeOut(duration: 0.16)) {
+                    action()
+                }
+            } else {
+                action()
+            }
+        }
     }
 
     private var filteredArticles: [Article] {

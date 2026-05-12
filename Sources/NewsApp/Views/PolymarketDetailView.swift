@@ -344,14 +344,14 @@ struct MarketDetailCard: View {
                 }
             }
 
-            // Open in Polymarket button
+            // Open source page button
             Button {
                 if let url = event.eventURL {
                     openURL(url)
                 }
             } label: {
                 HStack {
-                    Text("View on Polymarket")
+                    Text("View Source")
                     Image(systemName: "arrow.up.right")
                 }
                 .font(.system(size: 12, weight: .medium))

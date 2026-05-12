@@ -49,13 +49,14 @@ final class FeedParser {
         let entries = items.compactMap { item -> FeedEntry? in
             let id = item["id"] as? String ?? item["url"] as? String ?? UUID().uuidString
             let title = item["title"] as? String ?? "Untitled"
-            let link = item["url"] as? String
+            let link = item["url"] as? String ?? item["external_url"] as? String
             let summary = item["summary"] as? String
             let contentHTML = item["content_html"] as? String ?? item["content_text"] as? String
             let author = (item["author"] as? [String: Any])?["name"] as? String
+                ?? (item["authors"] as? [[String: Any]])?.first?["name"] as? String
             let dateString = item["date_published"] as? String
             let publishedAt = dateString.flatMap { dateParser.parse($0) }
-            let imageURL = item["image"] as? String
+            let imageURL = item["image"] as? String ?? item["banner_image"] as? String
             return FeedEntry(
                 externalID: id,
                 title: title,
@@ -180,26 +181,41 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
 }
 
 final class FeedDateParser {
-    private let rfc822Formatter: DateFormatter = {
+    private static func formatter(_ format: String) -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    private let dateFormatters: [DateFormatter] = [
+        formatter("EEE, dd MMM yyyy HH:mm:ss Z"),
+        formatter("EEE, dd MMM yyyy HH:mm:ss zzz"),
+        formatter("dd MMM yyyy HH:mm:ss Z"),
+        formatter("dd MMM yyyy HH:mm:ss zzz"),
+        formatter("yyyy-MM-dd'T'HH:mm:ssZ"),
+        formatter("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+    ]
+
+    private let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
 
-    private let rfc822AltFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "dd MMM yyyy HH:mm:ss Z"
+    private let isoFormatterWithoutFractionalSeconds: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
         return formatter
     }()
-
-    private let isoFormatter = ISO8601DateFormatter()
 
     func parse(_ value: String) -> Date? {
-        if let date = rfc822Formatter.date(from: value) { return date }
-        if let date = rfc822AltFormatter.date(from: value) { return date }
+        for formatter in dateFormatters {
+            if let date = formatter.date(from: value) { return date }
+        }
         if let date = isoFormatter.date(from: value) { return date }
+        if let date = isoFormatterWithoutFractionalSeconds.date(from: value) { return date }
         return nil
     }
 }

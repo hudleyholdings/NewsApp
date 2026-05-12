@@ -5,9 +5,15 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 BUILD_CONFIG="${1:-release}"
+APP_NAME="${APP_NAME:-NewsApp}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.hudleyholdings.newsapp}"
+APP_VERSION="${APP_VERSION:-1.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
+ENTITLEMENTS_FILE="${ENTITLEMENTS_FILE:-$ROOT_DIR/NewsApp.entitlements}"
 swift build -c "$BUILD_CONFIG"
 
-APP_DIR="$ROOT_DIR/build/NewsApp.app"
+APP_DIR="$ROOT_DIR/build/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -43,10 +49,12 @@ if [ -f "$ROOT_DIR/logo2_cropped.png" ]; then
 fi
 chmod +x "$MACOS_DIR/NewsApp"
 
-# Copy resource bundles (SPM may name them NewsApp_NewsApp.bundle or NewsApp_Resources.bundle)
-for bundle in "$ROOT_DIR/.build/$BUILD_CONFIG"/NewsApp*.bundle(N); do
-  cp -R "$bundle" "$RESOURCES_DIR/"
-done
+# Copy app resources into the native macOS bundle resource directory.
+cp -R "$ROOT_DIR/Sources/NewsApp/Resources/." "$RESOURCES_DIR/"
+
+if [ -f "$ROOT_DIR/Sources/NewsApp/Resources/PrivacyInfo.xcprivacy" ]; then
+  cp "$ROOT_DIR/Sources/NewsApp/Resources/PrivacyInfo.xcprivacy" "$RESOURCES_DIR/PrivacyInfo.xcprivacy"
+fi
 
 # Copy dynamic libraries to Frameworks folder (if any exist)
 for dylib in "$ROOT_DIR/.build/$BUILD_CONFIG"/*.dylib(N); do
@@ -60,40 +68,63 @@ done
 # Update the executable's rpath to find libraries in Frameworks
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/NewsApp" 2>/dev/null || true
 
-cat <<'PLIST' > "$CONTENTS_DIR/Info.plist"
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
   <key>CFBundleName</key>
-  <string>NewsApp</string>
+  <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>
-  <string>NewsApp</string>
+  <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>
-  <string>com.hudleyholdings.newsapp</string>
+  <string>$BUNDLE_IDENTIFIER</string>
   <key>CFBundleExecutable</key>
   <string>NewsApp</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BUILD_NUMBER</string>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
   <key>NSHumanReadableCopyright</key>
   <string>© 2024-2026 Hudley Holdings LLC. All rights reserved.</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSQuitAlwaysKeepsWindows</key>
+  <false/>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.news</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
+  <key>NSLocationUsageDescription</key>
+  <string>NewsApp uses your location only when you choose Use My Location to show local weather and nearby radio station distances.</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>NewsApp uses your location only when you choose Use My Location to show local weather and nearby radio station distances.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+  </dict>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
 </dict>
 </plist>
 PLIST
 
+plutil -lint "$CONTENTS_DIR/Info.plist" "$RESOURCES_DIR/PrivacyInfo.xcprivacy" >/dev/null
+
 # Re-sign the app bundle (required after modifying the bundle)
-codesign --force --deep --sign - "$APP_DIR"
+codesign_args=(--force --deep --sign "$CODE_SIGN_IDENTITY")
+if [ -f "$ENTITLEMENTS_FILE" ]; then
+  codesign_args+=(--entitlements "$ENTITLEMENTS_FILE")
+fi
+codesign "${codesign_args[@]}" "$APP_DIR"
 
 echo "Built: $APP_DIR"

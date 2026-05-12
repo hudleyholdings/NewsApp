@@ -88,7 +88,12 @@ enum ReaderCleaner {
     ]
 
     static func clean(_ text: String) -> String {
-        guard UserDefaults.standard.bool(forKey: "readerCleanupEnabled") else { return text }
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "readerCleanupEnabled") != nil,
+           defaults.bool(forKey: "readerCleanupEnabled") == false {
+            return text
+        }
+
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
         var paragraphs = normalized
             .components(separatedBy: "\n\n")

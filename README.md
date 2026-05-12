@@ -1,6 +1,6 @@
 # NewsApp
 
-A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed formats, plus live global event data from GDELT and prediction markets from Polymarket.
+A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed formats, plus live global event data from GDELT and public prediction-market data from Polymarket.
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)
 ![Swift 6.2](https://img.shields.io/badge/Swift-6.2-orange)
@@ -15,7 +15,7 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 - **OPML import/export** -- bring your feeds from other readers, or back them up
 - **Built-in reader mode** -- clean article view with configurable fonts, spacing, and width
 - **GDELT integration** -- browse global news events by topic (politics, tech, science, climate, etc.) in 13 languages
-- **Polymarket integration** -- track prediction markets with live prices and price history charts
+- **Polymarket integration** -- view public probability, volume, and price-history data
 - **Masonry/newspaper layout** -- a card-based grid view inspired by print newspapers
 - **TV View** -- a broadcast-style presentation with Ken Burns image animations and lower-third graphics
 - **Radio** -- stream news/talk radio stations from a built-in directory
@@ -30,13 +30,11 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 
 ### Download the app
 
-Grab `NewsApp.app` from the [latest release](../../releases/latest), unzip it, and drag it to your Applications folder.
-
-Since the app isn't signed with an Apple Developer certificate, macOS will block it on first launch. Go to **System Settings > Privacy & Security**, scroll down, and click **Open Anyway** next to the NewsApp message.
+For customers, install the signed App Store build from the Mac App Store when available.
 
 ### Build from source
 
-Requires **macOS 14+** and **Xcode 16+** (Swift 6.2).
+Requires **macOS 14+** and **Xcode 26+** for App Store submission builds.
 
 ```bash
 git clone https://github.com/hudleyholdings/NewsApp.git
@@ -45,7 +43,7 @@ cd NewsApp
 open build/NewsApp.app
 ```
 
-The build script compiles a release build, generates the app icon, bundles resources, and code-signs the app locally.
+The build script compiles a release build, generates the app icon, bundles resources, adds App Sandbox entitlements, and code-signs the app. By default it uses ad-hoc signing for local development; set `CODE_SIGN_IDENTITY`, `APP_VERSION`, `BUILD_NUMBER`, and `BUNDLE_IDENTIFIER` for distribution builds.
 
 To build a debug version:
 

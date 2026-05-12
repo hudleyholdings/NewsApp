@@ -1,64 +1,60 @@
 # Privacy Policy
 
-**Last Updated:** February 2026
+**Last Updated:** May 2026
 
 ## Overview
 
-NewsApp is a local-only RSS reader and news aggregator application. We are committed to protecting your privacy.
+NewsApp is a native macOS news reader. We do not operate a backend service for NewsApp, do not collect analytics, and do not sell or share user data.
 
-## Data Collection
+## Data Stored on Your Mac
 
-**We do not collect any personal data.** NewsApp operates entirely on your device.
+NewsApp stores app data locally in its macOS app container, including:
 
-### What NewsApp Stores Locally
+- Feed and source configurations
+- Cached article metadata and article content
+- Reading status, bookmarks, custom lists, and preferences
+- Radio favorites
+- Optional weather city or coordinates if you enable weather features
 
-All data is stored locally on your Mac in `~/Library/Application Support/NewsApp/`:
+NewsApp also writes local diagnostic logs under `~/Library/Logs/NewsApp/`. Logs are used for troubleshooting and are not transmitted by the app.
 
-- **Feed configurations** - The RSS feeds and sources you add
-- **Cached articles** - Article content for offline reading
-- **Reading lists** - Lists you create to organize feeds
-- **Preferences** - Your app settings
+## Network Requests
 
-### What NewsApp Does NOT Do
+NewsApp connects directly from your Mac to services needed for features you choose to use:
 
-- We do not transmit your data to any server we operate
-- We do not track your reading habits
-- We do not collect analytics
-- We do not use cookies or tracking technologies
-- We do not sell or share any data
+- RSS, Atom, JSON Feed, and website pages you subscribe to or open
+- GDELT Project for global news-event feeds
+- Polymarket for public prediction-market data
+- Open-Meteo for weather data and city search
+- Google favicon service for website icons
+- Radio station stream hosts when you play a station
+- Websites shown in the in-app web reader
 
-## Third-Party Services
+Those third-party services receive normal request information such as your IP address, user agent, requested URL, and timing. Their privacy policies govern their handling of those requests.
 
-NewsApp connects to third-party services to fetch content:
+## Location
 
-- **RSS/Atom feeds** - Websites you choose to subscribe to
-- **GDELT Project** - News aggregation service (api.gdeltproject.org)
-- **Polymarket** - Prediction market data (polymarket.com)
+Location access is optional. If you choose **Use My Location**, NewsApp uses Core Location to request your current location for local weather and nearby radio station distance features. You can turn this off in NewsApp settings or macOS Location Services.
 
-When you add a feed or source, NewsApp makes requests to those services to fetch content. Those services have their own privacy policies that govern how they handle requests. We recommend reviewing the privacy policies of any sources you subscribe to.
+## What NewsApp Does Not Do
 
-## iCloud Sync
-
-If you enable iCloud sync, your feed configurations and preferences are synced through your personal iCloud account, governed by Apple's privacy policy.
-
-## Log Files
-
-NewsApp maintains minimal log files for debugging purposes at `~/Library/Logs/NewsApp/`. These logs contain only operational information (feed sync status, error messages) and do not include article content or personal information. Logs are stored locally and are never transmitted.
+- We do not collect analytics or advertising identifiers.
+- We do not track your reading habits.
+- We do not send your feed list, bookmarks, or preferences to servers we operate.
+- We do not use App Tracking Transparency tracking.
+- We do not provide account creation or sync through a NewsApp service.
 
 ## Data Deletion
 
-To delete all NewsApp data:
-1. Quit NewsApp
-2. Delete `~/Library/Application Support/NewsApp/`
-3. Delete `~/Library/Logs/NewsApp/` (optional)
+To delete NewsApp data, remove the app and delete its macOS container data and local logs. In development builds, data may also appear under `~/Library/Application Support/NewsApp/`.
 
 ## Children's Privacy
 
-NewsApp does not knowingly collect any information from children under 13.
+NewsApp does not knowingly collect information from children under 13.
 
 ## Changes to This Policy
 
-We may update this privacy policy from time to time. Any changes will be reflected in the "Last Updated" date above.
+We may update this policy from time to time. Changes will be reflected in the "Last Updated" date above.
 
 ## Contact
 

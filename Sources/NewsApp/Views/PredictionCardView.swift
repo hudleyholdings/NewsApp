@@ -226,12 +226,12 @@ struct PredictionDetailView: View {
                     .foregroundColor(.secondary)
             }
 
-            // Link to Polymarket
+            // Link to source page
             if let link = article.link {
                 Link(destination: link) {
                     HStack {
                         Image(systemName: "arrow.up.right.square")
-                        Text("View on Polymarket")
+                        Text("View Source")
                     }
                     .font(.subheadline)
                     .foregroundColor(.accentColor)

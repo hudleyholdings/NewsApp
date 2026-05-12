@@ -448,15 +448,15 @@ private struct PolymarketSourceForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Add Polymarket Predictions")
+            Text("Add Prediction Market Data")
                 .font(.headline)
 
-            Text("Track prediction market odds and trends from Polymarket.")
+            Text("Follow public probability and volume data from Polymarket.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             // Legal disclaimer
-            Text("For informational purposes only. Not financial or investment advice. Check local regulations before participating in prediction markets.")
+            Text("For informational purposes only. NewsApp does not support trading, wagering, account creation, or transactions.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(8)
@@ -516,7 +516,7 @@ private struct PolymarketSourceForm: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(previewName)
                             .font(.subheadline.weight(.medium))
-                        Text("Prediction markets with real-time odds")
+                        Text("Public probability and volume data")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -534,7 +534,7 @@ private struct PolymarketSourceForm: View {
                             ProgressView()
                                 .controlSize(.small)
                         }
-                        Text(isAdding ? "Adding..." : "Add Polymarket Source")
+                        Text(isAdding ? "Adding..." : "Add Market Data Source")
                     }
                     .frame(minWidth: 160)
                 }

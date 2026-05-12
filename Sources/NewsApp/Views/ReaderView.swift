@@ -54,13 +54,8 @@ struct ReaderView: View {
                     modeOverride: modeBinding
                 )
                 if let notice = readerFallbackNotice {
-                    ReaderNoticeBanner(message: notice, buttonTitle: "Open Web") {
+                    ReaderNoticeBanner(message: notice, buttonTitle: "Show Preview") {
                         setModeOverride(.web)
-                    }
-                }
-                if currentDisplayMode == .web, !settings.persistentWebSessions {
-                    ReaderNoticeBanner(message: "Private Web Mode: Keychain access is disabled until you enable persistent sessions.", buttonTitle: "Enable") {
-                        settings.persistentWebSessions = true
                     }
                 }
                 Divider()
@@ -92,7 +87,6 @@ struct ReaderView: View {
                             url: article.link,
                             blockAds: settings.blockAdsEnabled,
                             userAgent: webUserAgent,
-                            persistentSession: settings.persistentWebSessions,
                             onScroll: { offset in
                                 updateHeaderCompact(forOffset: offset)
                             }
@@ -206,7 +200,7 @@ struct ReaderView: View {
         guard let text = article.contentText, !text.isEmpty else { return }
         let fallbackDetected = ReaderFallbackDetector.shouldFallback(text: text)
         if fallbackDetected {
-            let notice = "Reader mode blocked by publisher. Switched to Web view."
+            let notice = "Reader mode blocked by publisher. Switched to preview."
             if lastFallbackArticleID != article.id {
                 lastFallbackArticleID = article.id
                 readerFallbackNotice = notice
@@ -578,7 +572,7 @@ struct ReaderTextView: View {
                             }
                         }
                     } else if article.link != nil {
-                        Text("Tap image to view full size, or switch to Web view for more details.")
+                        Text("Tap image to view full size, or switch to Preview for more details.")
                             .font(settings.readerFont(size: settings.readerFontSize - 2, weight: .regular))
                             .foregroundStyle(.secondary)
                             .padding(.top, 8)
@@ -909,7 +903,7 @@ struct KeyboardScrollAnchor: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    class Coordinator {
+    final class Coordinator: @unchecked Sendable {
         weak var scrollView: NSScrollView?
         private var observer: NSObjectProtocol?
 
@@ -917,20 +911,22 @@ struct KeyboardScrollAnchor: NSViewRepresentable {
             observer = NotificationCenter.default.addObserver(
                 forName: .scrollReader, object: nil, queue: .main
             ) { [weak self] note in
-                guard let self, let scrollView = self.scrollView,
-                      let documentView = scrollView.documentView else { return }
                 let direction = (note.userInfo?["direction"] as? Int) ?? 1
-                let clip = scrollView.contentView
-                let current = clip.bounds.origin
-                let maxY = max(0, documentView.frame.height - clip.bounds.height)
-                let delta: CGFloat = CGFloat(direction) * 80
-                let newY = min(max(current.y + delta, 0), maxY)
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.12
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    clip.animator().setBoundsOrigin(NSPoint(x: current.x, y: newY))
+                Task { @MainActor in
+                    guard let self, let scrollView = self.scrollView,
+                          let documentView = scrollView.documentView else { return }
+                    let clip = scrollView.contentView
+                    let current = clip.bounds.origin
+                    let maxY = max(0, documentView.frame.height - clip.bounds.height)
+                    let delta: CGFloat = CGFloat(direction) * 80
+                    let newY = min(max(current.y + delta, 0), maxY)
+                    NSAnimationContext.runAnimationGroup { ctx in
+                        ctx.duration = 0.12
+                        ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                        clip.animator().setBoundsOrigin(NSPoint(x: current.x, y: newY))
+                    }
+                    scrollView.reflectScrolledClipView(clip)
                 }
-                scrollView.reflectScrolledClipView(clip)
             }
         }
 

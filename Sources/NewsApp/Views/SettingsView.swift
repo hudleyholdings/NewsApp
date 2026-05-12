@@ -5,7 +5,6 @@ import CoreLocation
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsStore
     @StateObject private var locationManager = LocationManager()
-    @State private var showPersistentAlert = false
     @State private var citySearchText = ""
 
     var body: some View {
@@ -120,14 +119,13 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
 
-                Toggle("Block Ads in Web View", isOn: $settings.blockAdsEnabled)
+                Toggle("Block Ads in Preview", isOn: $settings.blockAdsEnabled)
                 Toggle("Cache Images", isOn: $settings.cacheImagesEnabled)
             }
 
-            Section("Web View") {
+            Section("Preview") {
                 Toggle("Prefer Mobile Site", isOn: $settings.preferMobileSite)
-                Toggle("Allow Persistent Sessions (Keychain)", isOn: persistentSessionBinding)
-                Text("When enabled, web pages can store secure keys in your Keychain for logins. Off = Private Web Mode.")
+                Text("Preview pages use private storage with JavaScript disabled so NewsApp never prompts for WebCrypto Keychain access.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -336,25 +334,6 @@ struct SettingsView: View {
         .onChange(of: settings.typographyPreset) { _, newValue in
             settings.applyPreset(newValue)
         }
-        .alert("Enable Persistent Sessions?", isPresented: $showPersistentAlert) {
-            Button("Enable") { settings.persistentWebSessions = true }
-            Button("Cancel", role: .cancel) { settings.persistentWebSessions = false }
-        } message: {
-            Text("Some sites use WebCrypto and will prompt macOS to store a key in your Keychain. Enable this only if you want persistent logins and sessions.")
-        }
-    }
-
-    private var persistentSessionBinding: Binding<Bool> {
-        Binding(
-            get: { settings.persistentWebSessions },
-            set: { newValue in
-                if newValue {
-                    showPersistentAlert = true
-                } else {
-                    settings.persistentWebSessions = false
-                }
-            }
-        )
     }
 
     private var useLocationBinding: Binding<Bool> {
@@ -498,14 +477,9 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func requestPermission() {
-        #if os(macOS)
-        // On macOS, we need to request always authorization for location
         if CLLocationManager.locationServicesEnabled() {
-            manager.requestAlwaysAuthorization()
+            manager.requestWhenInUseAuthorization()
         }
-        #else
-        manager.requestWhenInUseAuthorization()
-        #endif
     }
 
     func requestLocation() {

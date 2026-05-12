@@ -39,9 +39,9 @@ struct MainSplitView: View {
             return "Radio"
         case .radioFavorites:
             return "Favorite Stations"
-        case .radioStation(let id):
+        case .radioStation:
             return "Radio"
-        case .radioCategory(let cat):
+        case .radioCategory:
             return "Radio"
         }
     }
@@ -443,10 +443,6 @@ struct MainSplitView: View {
                     feedStore.loadIfNeeded()
                     feedStore.configureAutoRefresh(enabled: settings.autoRefreshEnabled, intervalMinutes: settings.refreshIntervalMinutes)
                     Task { await ContentBlockerStore.shared.load() }
-                    Task {
-                        try? await Task.sleep(nanoseconds: 400_000_000)
-                        await feedStore.refreshAll()
-                    }
                 }
                 .onChange(of: settings.autoRefreshEnabled) { _, newValue in
                     feedStore.configureAutoRefresh(enabled: newValue, intervalMinutes: settings.refreshIntervalMinutes)

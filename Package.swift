@@ -18,9 +18,7 @@ let package = Package(
             dependencies: [
                 "SwiftSoup"
             ],
-            resources: [
-                .process("Resources")
-            ]
+            exclude: ["Resources"]
         ),
         .testTarget(
             name: "NewsAppTests",
