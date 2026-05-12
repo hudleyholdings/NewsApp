@@ -150,19 +150,9 @@ struct MainSplitView: View {
         HSplitView {
             FeedListView()
                 .frame(minWidth: 280, idealWidth: 320, maxWidth: 420, alignment: .leading)
-                .overlay(alignment: .top) {
-                    if isMainView && focusedPane == .sidebar {
-                        focusBar
-                    }
-                }
 
             ContentListView()
                 .frame(minWidth: 340, idealWidth: 420, maxWidth: showReaderPane ? 560 : .infinity, alignment: .leading)
-                .overlay(alignment: .top) {
-                    if isMainView && focusedPane == .articleList {
-                        focusBar
-                    }
-                }
 
             if showReaderPane {
                 ReaderPaneView(
@@ -171,11 +161,6 @@ struct MainSplitView: View {
                 )
                 .frame(minWidth: 460, idealWidth: 680, maxWidth: .infinity, alignment: .leading)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
-                .overlay(alignment: .top) {
-                    if isMainView && focusedPane == .reader {
-                        focusBar
-                    }
-                }
             }
         }
         .focusable(isMainView)
@@ -186,14 +171,6 @@ struct MainSplitView: View {
         .animation(.easeInOut(duration: 0.2), value: showReaderPane)
         .frame(minWidth: showReaderPane ? 1180 : 720, minHeight: 680)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var focusBar: some View {
-        Rectangle()
-            .fill(Color.accentColor.opacity(0.7))
-            .frame(height: 2)
-            .transition(.opacity)
-            .animation(.easeOut(duration: 0.15), value: focusedPane)
     }
 
     // MARK: - Keyboard Navigation
