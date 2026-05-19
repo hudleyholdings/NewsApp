@@ -290,7 +290,7 @@ struct SettingsView: View {
 
             Section("About") {
                 HStack {
-                    Text("NewsApp")
+                    Text("News App: RSS Reader & More")
                         .font(.headline)
                     Spacer()
                     Text("Version 1.0")

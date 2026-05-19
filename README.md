@@ -1,4 +1,4 @@
-# NewsApp
+# News App: RSS Reader & More
 
 A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed formats, plus live global event data from GDELT and public prediction-market data from Polymarket.
 
@@ -6,7 +6,7 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 ![Swift 6.2](https://img.shields.io/badge/Swift-6.2-orange)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 
-![NewsApp screenshot](screenshot.png)
+![News App screenshot](screenshot.png)
 
 ## Features
 
@@ -30,7 +30,7 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 
 ### Download the app
 
-For customers, install the signed App Store build from the Mac App Store when available.
+For customers, install **News App: RSS Reader & More** from the Mac App Store when available.
 
 ### Build from source
 

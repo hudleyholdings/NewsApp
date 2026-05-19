@@ -4,11 +4,11 @@
 
 ## Acceptance of Terms
 
-By downloading, installing, or using NewsApp ("the App"), you agree to these Terms of Service.
+By downloading, installing, or using News App: RSS Reader & More ("the App"), you agree to these Terms of Service.
 
 ## Description of Service
 
-NewsApp is a local RSS reader and news aggregator application for macOS. The App allows you to:
+News App: RSS Reader & More is a local RSS reader and news aggregator application for macOS. The App allows you to:
 - Subscribe to RSS/Atom feeds from websites
 - Aggregate news from the GDELT Project
 - View public prediction-market data from Polymarket
@@ -53,7 +53,7 @@ Prediction markets may be subject to legal restrictions in your jurisdiction. Yo
 
 ### The App
 
-NewsApp is released under the MIT License. See the LICENSE file for details.
+News App: RSS Reader & More is released under the MIT License. See the LICENSE file for details.
 
 ### Third-Party Content
 
@@ -78,7 +78,7 @@ TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE SHALL NOT BE LIABLE FOR ANY INDIRECT,
 
 ## Indemnification
 
-You agree to indemnify and hold harmless Hudley Holdings LLC and the developers of NewsApp from any claims, damages, or expenses arising from:
+You agree to indemnify and hold harmless Hudley Holdings LLC and the developers of News App: RSS Reader & More from any claims, damages, or expenses arising from:
 - Your use of the App
 - Your violation of these Terms
 - Your violation of any third-party rights
@@ -105,4 +105,4 @@ For questions about these Terms, contact Hudley Holdings LLC.
 
 ---
 
-These Terms of Service apply to the NewsApp macOS application.
+These Terms of Service apply to the News App: RSS Reader & More macOS application.

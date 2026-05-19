@@ -56,7 +56,7 @@ struct WelcomeView: View {
                     .frame(width: 96, height: 96)
             }
 
-            Text("Welcome to NewsApp")
+            Text("Welcome to News App")
                 .font(.system(size: 28, weight: .bold, design: .serif))
 
             Text("A fast, native RSS reader for macOS.\nLet's get you set up.")

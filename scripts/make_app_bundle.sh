@@ -6,12 +6,53 @@ cd "$ROOT_DIR"
 
 BUILD_CONFIG="${1:-release}"
 APP_NAME="${APP_NAME:-NewsApp}"
+DISPLAY_NAME="${DISPLAY_NAME:-News App: RSS Reader & More}"
 BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.hudleyholdings.newsapp}"
 APP_VERSION="${APP_VERSION:-1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:--}"
 ENTITLEMENTS_FILE="${ENTITLEMENTS_FILE:-$ROOT_DIR/NewsApp.entitlements}"
-swift build -c "$BUILD_CONFIG"
+PROVISIONING_PROFILE="${PROVISIONING_PROFILE:-}"
+TEAM_ID="${TEAM_ID:-}"
+SIGNING_KEYCHAIN="${SIGNING_KEYCHAIN:-}"
+UNIVERSAL="${UNIVERSAL:-0}"
+
+case "$BUILD_CONFIG" in
+  release)
+    XCODE_BUILD_CONFIG="Release"
+    ;;
+  debug)
+    XCODE_BUILD_CONFIG="Debug"
+    ;;
+  *)
+    echo "Unsupported build config: $BUILD_CONFIG"
+    exit 64
+    ;;
+esac
+
+if [[ "$UNIVERSAL" == "1" || "$UNIVERSAL" == "true" || "$UNIVERSAL" == "YES" ]]; then
+  swift build -c "$BUILD_CONFIG" --arch arm64 --arch x86_64
+  BUILT_EXECUTABLE="$ROOT_DIR/.build/apple/Products/$XCODE_BUILD_CONFIG/NewsApp"
+else
+  swift build -c "$BUILD_CONFIG"
+  BUILT_EXECUTABLE="$ROOT_DIR/.build/$BUILD_CONFIG/NewsApp"
+fi
+
+xml_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"
+  value="${value//</&lt;}"
+  value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"
+  value="${value//\'/&apos;}"
+  print -r -- "$value"
+}
+
+XML_APP_NAME="$(xml_escape "$APP_NAME")"
+XML_DISPLAY_NAME="$(xml_escape "$DISPLAY_NAME")"
+XML_BUNDLE_IDENTIFIER="$(xml_escape "$BUNDLE_IDENTIFIER")"
+XML_APP_VERSION="$(xml_escape "$APP_VERSION")"
+XML_BUILD_NUMBER="$(xml_escape "$BUILD_NUMBER")"
 
 APP_DIR="$ROOT_DIR/build/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -22,7 +63,7 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 
-cp "$ROOT_DIR/.build/$BUILD_CONFIG/NewsApp" "$MACOS_DIR/NewsApp"
+cp "$BUILT_EXECUTABLE" "$MACOS_DIR/NewsApp"
 
 # Generate app icon from logo2_cropped.png
 if [ -f "$ROOT_DIR/logo2_cropped.png" ]; then
@@ -56,12 +97,31 @@ if [ -f "$ROOT_DIR/Sources/NewsApp/Resources/PrivacyInfo.xcprivacy" ]; then
   cp "$ROOT_DIR/Sources/NewsApp/Resources/PrivacyInfo.xcprivacy" "$RESOURCES_DIR/PrivacyInfo.xcprivacy"
 fi
 
+if [ -n "$PROVISIONING_PROFILE" ]; then
+  if [ ! -f "$PROVISIONING_PROFILE" ]; then
+    echo "Missing provisioning profile: $PROVISIONING_PROFILE"
+    exit 66
+  fi
+  cp "$PROVISIONING_PROFILE" "$CONTENTS_DIR/embedded.provisionprofile"
+fi
+
 # Copy dynamic libraries to Frameworks folder (if any exist)
-for dylib in "$ROOT_DIR/.build/$BUILD_CONFIG"/*.dylib(N); do
+if [[ "$UNIVERSAL" == "1" || "$UNIVERSAL" == "true" || "$UNIVERSAL" == "YES" ]]; then
+  DYLIB_DIR="$ROOT_DIR/.build/apple/Products/$XCODE_BUILD_CONFIG"
+else
+  DYLIB_DIR="$ROOT_DIR/.build/$BUILD_CONFIG"
+fi
+
+for dylib in "$DYLIB_DIR"/*.dylib(N); do
   if [ -f "$dylib" ]; then
     cp "$dylib" "$FRAMEWORKS_DIR/"
     DYLIB_NAME=$(basename "$dylib")
     install_name_tool -id "@rpath/$DYLIB_NAME" "$FRAMEWORKS_DIR/$DYLIB_NAME"
+    codesign_keychain_args=()
+    if [[ -n "$SIGNING_KEYCHAIN" ]]; then
+      codesign_keychain_args=(--keychain "$SIGNING_KEYCHAIN")
+    fi
+    codesign --force --sign "$CODE_SIGN_IDENTITY" "${codesign_keychain_args[@]}" "$FRAMEWORKS_DIR/$DYLIB_NAME"
   fi
 done
 
@@ -76,11 +136,11 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>$APP_NAME</string>
+  <string>$XML_APP_NAME</string>
   <key>CFBundleDisplayName</key>
-  <string>$APP_NAME</string>
+  <string>$XML_DISPLAY_NAME</string>
   <key>CFBundleIdentifier</key>
-  <string>$BUNDLE_IDENTIFIER</string>
+  <string>$XML_BUNDLE_IDENTIFIER</string>
   <key>CFBundleExecutable</key>
   <string>NewsApp</string>
   <key>CFBundlePackageType</key>
@@ -90,9 +150,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
     <string>MacOSX</string>
   </array>
   <key>CFBundleShortVersionString</key>
-  <string>$APP_VERSION</string>
+  <string>$XML_APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>$BUILD_NUMBER</string>
+  <string>$XML_BUILD_NUMBER</string>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>NSHumanReadableCopyright</key>
@@ -108,9 +168,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>NSLocationUsageDescription</key>
-  <string>NewsApp uses your location only when you choose Use My Location to show local weather and nearby radio station distances.</string>
+  <string>$XML_DISPLAY_NAME uses your location only when you choose Use My Location to show local weather and nearby radio station distances.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>NewsApp uses your location only when you choose Use My Location to show local weather and nearby radio station distances.</string>
+  <string>$XML_DISPLAY_NAME uses your location only when you choose Use My Location to show local weather and nearby radio station distances.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>
@@ -124,10 +184,28 @@ PLIST
 
 plutil -lint "$CONTENTS_DIR/Info.plist" "$RESOURCES_DIR/PrivacyInfo.xcprivacy" >/dev/null
 
+# Quarantine xattrs inherited from downloaded signing assets make App Store
+# processing fail after productbuild packages the bundle.
+xattr -cr "$APP_DIR" 2>/dev/null || true
+
 # Re-sign the app bundle (required after modifying the bundle)
+SIGNING_ENTITLEMENTS_FILE="$ENTITLEMENTS_FILE"
+if [[ -n "$TEAM_ID" && -f "$ENTITLEMENTS_FILE" ]]; then
+  SIGNING_ENTITLEMENTS_FILE="$(mktemp "$ROOT_DIR/build/$APP_NAME.entitlements.plist.XXXXXX")"
+  cp "$ENTITLEMENTS_FILE" "$SIGNING_ENTITLEMENTS_FILE"
+
+  /usr/libexec/PlistBuddy -c "Set :com.apple.application-identifier $TEAM_ID.$BUNDLE_IDENTIFIER" "$SIGNING_ENTITLEMENTS_FILE" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $TEAM_ID.$BUNDLE_IDENTIFIER" "$SIGNING_ENTITLEMENTS_FILE"
+  /usr/libexec/PlistBuddy -c "Set :com.apple.developer.team-identifier $TEAM_ID" "$SIGNING_ENTITLEMENTS_FILE" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $TEAM_ID" "$SIGNING_ENTITLEMENTS_FILE"
+fi
+
 codesign_args=(--force --deep --sign "$CODE_SIGN_IDENTITY")
-if [ -f "$ENTITLEMENTS_FILE" ]; then
-  codesign_args+=(--entitlements "$ENTITLEMENTS_FILE")
+if [[ -n "$SIGNING_KEYCHAIN" ]]; then
+  codesign_args+=(--keychain "$SIGNING_KEYCHAIN")
+fi
+if [ -f "$SIGNING_ENTITLEMENTS_FILE" ]; then
+  codesign_args+=(--entitlements "$SIGNING_ENTITLEMENTS_FILE")
 fi
 codesign "${codesign_args[@]}" "$APP_DIR"
 

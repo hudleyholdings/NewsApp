@@ -3,6 +3,18 @@
 build
 .swiftpm
 
+# Signing and App Store Connect secrets
+*.cer
+*.certSigningRequest
+*.csr
+*.mobileprovision
+*.p12
+*.p8
+*.provisionprofile
+
+# Working art / design assets
+*.pxd
+
 # Development files
 .claude/
 docs/
