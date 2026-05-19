@@ -8,6 +8,8 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 
 ![News App screenshot](screenshot.png)
 
+**[Download on the Mac App Store](https://apps.apple.com/us/app/news-app-rss-reader-more/id6768790083?mt=12)**
+
 ## Features
 
 - **Multi-format feeds** -- RSS 2.0, Atom 1.0, JSON Feed
@@ -24,13 +26,13 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 - **Dark mode** -- follows system appearance or set manually
 - **Custom lists** -- organize articles into bookmarks and custom collections
 - **Auto-refresh** -- configurable background refresh interval
-- **Local storage** -- all data stays on your Mac in `~/Library/Application Support/NewsApp/`
+- **Local storage** -- all data stays on your Mac in the app's sandboxed container (no servers, no analytics)
 
 ## Install
 
 ### Download the app
 
-For customers, install **News App: RSS Reader & More** from the Mac App Store when available.
+Get **News App: RSS Reader & More** on the [Mac App Store](https://apps.apple.com/us/app/news-app-rss-reader-more/id6768790083?mt=12).
 
 ### Build from source
 
@@ -56,6 +58,18 @@ Or if you just want to compile without bundling:
 ```bash
 swift build
 ```
+
+For a signed, universal (arm64 + x86_64) Mac App Store `.pkg`:
+
+```bash
+TEAM_ID=YOURTEAMID \
+CODE_SIGN_IDENTITY="3rd Party Mac Developer Application: ..." \
+INSTALLER_SIGN_IDENTITY="3rd Party Mac Developer Installer: ..." \
+PROVISIONING_PROFILE=/path/to/profile.provisionprofile \
+./scripts/make_app_store_pkg.sh
+```
+
+Set `VALIDATE=1` or `UPLOAD=1` (plus `ASC_API_KEY`/`ASC_API_ISSUER` or `ASC_USERNAME`/`ASC_PASSWORD_KEYCHAIN_ITEM`) to validate or submit through `altool`.
 
 ## Project Structure
 
