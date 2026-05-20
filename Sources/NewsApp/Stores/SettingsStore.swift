@@ -1,5 +1,75 @@
 import SwiftUI
 
+/// Temperature + wind units for the weather widgets.
+enum WeatherUnits: String, CaseIterable, Identifiable, Codable {
+    case fahrenheit
+    case celsius
+
+    var id: String { rawValue }
+
+    /// Sensible initial value for the onboarding picker. Derived from the user's locale
+    /// (US uses Fahrenheit; everyone else uses Celsius). The user can override in the
+    /// onboarding step or later in Settings.
+    static var systemDefault: WeatherUnits {
+        Locale.current.measurementSystem == .us ? .fahrenheit : .celsius
+    }
+
+    var temperatureSymbol: String {
+        switch self {
+        case .fahrenheit: return "°F"
+        case .celsius: return "°C"
+        }
+    }
+
+    /// Short suffix for display in the toolbar (no extra space — e.g. "72°").
+    var temperatureSuffixShort: String { "°" }
+
+    var windSpeedLabel: String {
+        switch self {
+        case .fahrenheit: return "mph"
+        case .celsius: return "km/h"
+        }
+    }
+
+    /// Open-Meteo's URL query value for `temperature_unit`.
+    var openMeteoTemperatureParameter: String {
+        switch self {
+        case .fahrenheit: return "fahrenheit"
+        case .celsius: return "celsius"
+        }
+    }
+
+    /// Open-Meteo's URL query value for `windspeed_unit`.
+    var openMeteoWindspeedParameter: String {
+        switch self {
+        case .fahrenheit: return "mph"
+        case .celsius: return "kmh"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .fahrenheit: return "Fahrenheit"
+        case .celsius: return "Celsius"
+        }
+    }
+}
+
+/// Sort order for categories and the feeds inside them in the sidebar.
+enum SidebarSortMode: String, CaseIterable, Identifiable, Codable {
+    case alphabetical
+    case byUnreadCount
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .alphabetical: return "Alphabetical"
+        case .byUnreadCount: return "Unread Count"
+        }
+    }
+}
+
 enum BadgeCountMode: String, CaseIterable, Identifiable, Codable {
     case unread
     case newSinceSession
@@ -62,6 +132,7 @@ final class SettingsStore: ObservableObject {
     @AppStorage("weatherLatitude") var weatherLatitude: Double = 0
     @AppStorage("weatherLongitude") var weatherLongitude: Double = 0
     @AppStorage("useLocationServices") var useLocationServices: Bool = false
+    @AppStorage("weatherUnits") var weatherUnits: WeatherUnits = WeatherUnits.systemDefault
 
     // TV View Settings
     @AppStorage("tvStoryDuration") var tvStoryDuration: Int = 20
@@ -80,6 +151,51 @@ final class SettingsStore: ObservableObject {
 
     // Badge Count Settings
     @AppStorage("badgeCountMode") var badgeCountMode: BadgeCountMode = .unread
+
+    // Sidebar controls
+    @AppStorage("sidebarFilterUnreadOnly") var sidebarFilterUnreadOnly: Bool = false
+    @AppStorage("sidebarSortMode") var sidebarSortMode: SidebarSortMode = .alphabetical
+    /// JSON-encoded array of category names that are currently collapsed in the sidebar.
+    /// Stored via `@AppStorage` as a String so `Set<String>` can persist across launches;
+    /// access through `collapsedCategories` rather than this raw property.
+    @AppStorage("collapsedCategoriesJSON") var collapsedCategoriesJSON: String = "[]"
+
+    /// User-collapsed category names. Backed by `collapsedCategoriesJSON` so changes
+    /// persist and trigger SwiftUI re-renders through `@AppStorage` observation.
+    var collapsedCategories: Set<String> {
+        get {
+            guard let data = collapsedCategoriesJSON.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return Set(array)
+        }
+        set {
+            let sorted = Array(newValue).sorted()
+            if let data = try? JSONEncoder().encode(sorted),
+               let json = String(data: data, encoding: .utf8) {
+                collapsedCategoriesJSON = json
+            }
+        }
+    }
+
+    func toggleCategoryCollapsed(_ category: String) {
+        var current = collapsedCategories
+        if current.contains(category) {
+            current.remove(category)
+        } else {
+            current.insert(category)
+        }
+        collapsedCategories = current
+    }
+
+    func collapseAllCategories(_ categories: [String]) {
+        collapsedCategories = Set(categories)
+    }
+
+    func expandAllCategories() {
+        collapsedCategories = []
+    }
 
     // Onboarding
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false

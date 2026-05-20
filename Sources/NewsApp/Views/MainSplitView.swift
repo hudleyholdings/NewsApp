@@ -9,9 +9,14 @@ struct MainSplitView: View {
     @State private var showingTVView = false
     @State private var showReaderPane = true
     @State private var isReaderExpanded = false
-    @State private var focusedPane: FocusedPane = .articleList
+    @State private var focusedPane: FocusedPane = .sidebar
     @State private var previewImageURL: URL?
     @State private var keyMonitor: Any?
+    @State private var pendingMarkAllScope: SidebarSelection?
+    @State private var pendingMarkAllCount: Int = 0
+
+    /// Show a confirmation dialog when Mark All as Read would affect more than this many articles.
+    private let markAllConfirmThreshold = 25
 
     enum FocusedPane: Equatable {
         case sidebar, articleList, reader
@@ -118,6 +123,64 @@ struct MainSplitView: View {
                 Task { await feedStore.refreshAll() }
             }
             .disabled(feedStore.isRefreshing)
+
+            HeaderBarButton(
+                icon: "checkmark.circle",
+                label: markAllAsReadTooltip
+            ) {
+                requestMarkAllAsRead()
+            }
+            .disabled(markAllAsReadDisabled)
+        }
+    }
+
+    // MARK: - Mark All as Read
+
+    private var markAllAsReadUnreadCount: Int {
+        feedStore.badgeCount(for: feedStore.selectedSidebarItem, mode: .unread)
+    }
+
+    private var markAllAsReadDisabled: Bool {
+        markAllAsReadUnreadCount == 0
+    }
+
+    private var markAllAsReadTooltip: String {
+        let count = markAllAsReadUnreadCount
+        guard count > 0 else { return "Mark All as Read" }
+        let scope = scopeName(for: feedStore.selectedSidebarItem) ?? "this view"
+        let noun = count == 1 ? "article" : "articles"
+        return "Mark all \(count) \(noun) in \(scope) as read"
+    }
+
+    private func requestMarkAllAsRead() {
+        let scope = feedStore.selectedSidebarItem
+        let count = feedStore.badgeCount(for: scope, mode: .unread)
+        guard count > 0 else { return }
+        if count > markAllConfirmThreshold {
+            pendingMarkAllScope = scope
+            pendingMarkAllCount = count
+        } else {
+            feedStore.markAllAsRead(for: scope)
+        }
+    }
+
+    private var markAllConfirmationTitle: String {
+        let scope = scopeName(for: pendingMarkAllScope) ?? "this view"
+        let noun = pendingMarkAllCount == 1 ? "article" : "articles"
+        return "Mark \(pendingMarkAllCount) \(noun) in \(scope) as read?"
+    }
+
+    private func scopeName(for selection: SidebarSelection?) -> String? {
+        guard let selection else { return "All Feeds" }
+        switch selection {
+        case .feed(let id):
+            return feedStore.feedName(for: id)
+        case .list(let id):
+            return feedStore.listName(for: id)
+        case .category(let name):
+            return name
+        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites:
+            return nil
         }
     }
 
@@ -149,25 +212,10 @@ struct MainSplitView: View {
     // Overlay views (Cards, TV, Expanded Reader) live OUTSIDE NavigationStack
     // so they cannot disrupt macOS NSToolbar item reconciliation.
     private var stableMainContent: some View {
-        HSplitView {
-            FeedListView()
-                .frame(minWidth: 280, idealWidth: 320, maxWidth: 420, alignment: .leading)
-
-            ContentListView()
-                .frame(minWidth: 340, idealWidth: 420, maxWidth: showReaderPane ? 560 : .infinity, alignment: .leading)
-
-            if showReaderPane {
-                ReaderPaneView(
-                    showReaderPane: $showReaderPane,
-                    isExpanded: $isReaderExpanded
-                )
-                .frame(minWidth: 460, idealWidth: 680, maxWidth: .infinity, alignment: .leading)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: showReaderPane)
-        .frame(minWidth: showReaderPane ? 1180 : 720, minHeight: 680)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        MainPanesView(
+            showReaderPane: $showReaderPane,
+            isReaderExpanded: $isReaderExpanded
+        )
     }
 
     // MARK: - Keyboard Navigation
@@ -178,6 +226,18 @@ struct MainSplitView: View {
 
     private var hasRadioFavorites: Bool {
         !RadioStore.shared.favorites.isEmpty
+    }
+
+    /// When focus enters the article-list pane, make sure a row is selected so the user
+    /// gets immediate visual feedback that keyboard input is now driving this column.
+    /// Skip if the existing selection is still valid for the current filtered list.
+    private func ensureArticleSelected() {
+        let articles = feedStore.filteredSortedArticles()
+        guard !articles.isEmpty else { return }
+        if let id = feedStore.selectedArticleID, articles.contains(where: { $0.id == id }) {
+            return
+        }
+        feedStore.selectedArticleID = articles.first?.id
     }
 
     private func moveFocusLeft() {
@@ -194,7 +254,12 @@ struct MainSplitView: View {
     private func moveFocusRight() {
         switch focusedPane {
         case .sidebar:
+            // Don't move focus into an empty article list — the user would be "in" the
+            // middle column with nothing to act on and no visual cue that pressing right
+            // again won't help. Keep focus on the sidebar so up/down can find content.
+            guard !feedStore.filteredSortedArticles().isEmpty else { return }
             focusedPane = .articleList
+            ensureArticleSelected()
         case .articleList:
             if showReaderPane {
                 focusedPane = .reader
@@ -448,6 +513,14 @@ struct MainSplitView: View {
                         withAnimation { showReaderPane = true }
                     }
                 }
+                .onChange(of: feedStore.selectedSidebarItem) { _, _ in
+                    // Mouse-clicking a sidebar row never updated `focusedPane`, so the
+                    // stored focus would drift away from where the user thinks they are
+                    // and right-arrow would silently no-op. Sync focus on any selection
+                    // change — keyboard sidebar nav is already in `.sidebar`, so this is
+                    // idempotent there.
+                    focusedPane = .sidebar
+                }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openFeedManager)) { _ in
             showingFeedManager = true
@@ -465,6 +538,29 @@ struct MainSplitView: View {
         .onReceive(NotificationCenter.default.publisher(for: .decreaseFontSize)) { _ in
             settings.typeScale = max(settings.typeScale - 0.1, 0.75)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .markAllAsRead)) { _ in
+            requestMarkAllAsRead()
+        }
+        .confirmationDialog(
+            markAllConfirmationTitle,
+            isPresented: Binding(
+                get: { pendingMarkAllScope != nil },
+                set: { if !$0 { pendingMarkAllScope = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Mark as Read") {
+                if let scope = pendingMarkAllScope {
+                    feedStore.markAllAsRead(for: scope)
+                }
+                pendingMarkAllScope = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingMarkAllScope = nil
+            }
+        } message: {
+            Text("This will mark every unread article in this view as read. You can't undo this.")
+        }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 // Don't intercept when a text field or search field has focus
@@ -479,6 +575,261 @@ struct MainSplitView: View {
             if let monitor = keyMonitor {
                 NSEvent.removeMonitor(monitor)
                 keyMonitor = nil
+            }
+        }
+    }
+}
+
+/// Three-column split view backed by `NSSplitView` directly so we can pin the sidebar's
+/// width across every relayout. SwiftUI's `HSplitView` re-runs proportional redistribution
+/// whenever its inner subviews re-render (which happens on every `feedStore` change), and
+/// the sidebar would creep wider on every story or category click. Using a custom
+/// `NSSplitViewDelegate` we hold the sidebar's exact pixel width and let only the
+/// article-list / reader columns absorb size changes.
+private struct MainPanesView: View {
+    @EnvironmentObject private var feedStore: FeedStore
+    @EnvironmentObject private var settings: SettingsStore
+    @Binding var showReaderPane: Bool
+    @Binding var isReaderExpanded: Bool
+
+    var body: some View {
+        PinnedSidebarSplitView(detailVisible: $showReaderPane) {
+            FeedListView()
+                .environmentObject(feedStore)
+                .environmentObject(settings)
+        } content: {
+            ContentListView()
+                .environmentObject(feedStore)
+                .environmentObject(settings)
+        } detail: {
+            ReaderPaneView(
+                showReaderPane: $showReaderPane,
+                isExpanded: $isReaderExpanded
+            )
+            .environmentObject(feedStore)
+            .environmentObject(settings)
+        }
+        .frame(minWidth: showReaderPane ? 1180 : 720, minHeight: 680)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Column-width constants for `PinnedSidebarSplitView`. Lifted out of the generic
+/// `Coordinator` class because Swift does not allow static stored properties on nested
+/// types of generic types.
+private enum SplitViewMetrics {
+    static let minSidebarWidth: CGFloat = 240
+    static let maxSidebarWidth: CGFloat = 500
+    static let defaultSidebarWidth: CGFloat = 420
+    static let minContentWidth: CGFloat = 340
+    static let defaultContentWidth: CGFloat = 480
+    static let minDetailWidth: CGFloat = 460
+}
+
+/// NSViewRepresentable wrapping `NSSplitView` with custom delegate logic that pins the
+/// sidebar to its current pixel width. The middle and trailing columns absorb all
+/// resizing — both window resizes and the detail pane appearing/disappearing.
+///
+/// Why not SwiftUI's `HSplitView`? When any subview re-renders (which SwiftUI does
+/// constantly via @Published observation), HSplitView invalidates its layout and
+/// redistributes proportionally, walking the sidebar's width away from the user's
+/// dragged position. `NSSplitView` with a delegate that overrides
+/// `splitView(_:resizeSubviewsWithOldSize:)` keeps the sidebar fixed.
+private struct PinnedSidebarSplitView<Sidebar: View, Content: View, Detail: View>: NSViewRepresentable {
+    @Binding var detailVisible: Bool
+    let sidebar: Sidebar
+    let content: Content
+    let detail: Detail
+
+    init(
+        detailVisible: Binding<Bool>,
+        @ViewBuilder sidebar: () -> Sidebar,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder detail: () -> Detail
+    ) {
+        self._detailVisible = detailVisible
+        self.sidebar = sidebar()
+        self.content = content()
+        self.detail = detail()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSSplitView {
+        let splitView = NSSplitView()
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.delegate = context.coordinator
+        splitView.translatesAutoresizingMaskIntoConstraints = true
+        splitView.autoresizesSubviews = false
+
+        let sidebarHost = NSHostingView(rootView: AnyView(sidebar))
+        let contentHost = NSHostingView(rootView: AnyView(content))
+        let detailHost = NSHostingView(rootView: AnyView(detail))
+        context.coordinator.sidebarHost = sidebarHost
+        context.coordinator.contentHost = contentHost
+        context.coordinator.detailHost = detailHost
+
+        splitView.addArrangedSubview(sidebarHost)
+        splitView.addArrangedSubview(contentHost)
+        if detailVisible {
+            splitView.addArrangedSubview(detailHost)
+        }
+
+        // Seed initial divider positions on the next layout pass.
+        DispatchQueue.main.async {
+            let totalWidth = splitView.bounds.width
+            guard totalWidth > 0 else { return }
+            splitView.setPosition(SplitViewMetrics.defaultSidebarWidth, ofDividerAt: 0)
+            if splitView.arrangedSubviews.count >= 3 {
+                let contentTrailing = SplitViewMetrics.defaultSidebarWidth + SplitViewMetrics.defaultContentWidth
+                splitView.setPosition(contentTrailing, ofDividerAt: 1)
+            }
+        }
+
+        return splitView
+    }
+
+    func updateNSView(_ nsView: NSSplitView, context: Context) {
+        // Propagate SwiftUI re-renders into each NSHostingView. These rootView
+        // assignments do not trigger NSSplitView layout invalidation, so the sidebar
+        // width survives every selection / refresh tick.
+        context.coordinator.sidebarHost?.rootView = AnyView(sidebar)
+        context.coordinator.contentHost?.rootView = AnyView(content)
+        context.coordinator.detailHost?.rootView = AnyView(detail)
+
+        // Add or remove the detail column without disturbing the sidebar's width.
+        let hasDetail = nsView.arrangedSubviews.count == 3
+        if detailVisible && !hasDetail, let detailHost = context.coordinator.detailHost {
+            // Flag a one-shot restoration so the upcoming layout pass uses the user's
+            // last detail-column width instead of the proportional fallback.
+            context.coordinator.shouldRestoreDetailWidth = context.coordinator.rememberedDetailWidth != nil
+            nsView.addArrangedSubview(detailHost)
+        } else if !detailVisible && hasDetail {
+            if let detailView = nsView.arrangedSubviews.last {
+                context.coordinator.rememberedDetailWidth = detailView.frame.width
+                detailView.removeFromSuperview()
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSSplitViewDelegate {
+        var sidebarHost: NSHostingView<AnyView>?
+        var contentHost: NSHostingView<AnyView>?
+        var detailHost: NSHostingView<AnyView>?
+        /// Last detail-column width before the user closed the reader pane. Restored
+        /// on the next reopen so the column doesn't snap back to a default size.
+        var rememberedDetailWidth: CGFloat?
+        /// Set to true for the single resize pass that follows re-adding the detail
+        /// column; tells the layout to apply `rememberedDetailWidth` instead of the
+        /// proportional content/detail redistribution.
+        var shouldRestoreDetailWidth = false
+
+        func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMin: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+            switch dividerIndex {
+            case 0:
+                return SplitViewMetrics.minSidebarWidth
+            case 1:
+                let sidebarTrailing = splitView.arrangedSubviews.first?.frame.maxX ?? SplitViewMetrics.minSidebarWidth
+                return sidebarTrailing + SplitViewMetrics.minContentWidth
+            default:
+                return proposedMin
+            }
+        }
+
+        func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMax: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+            switch dividerIndex {
+            case 0:
+                return min(SplitViewMetrics.maxSidebarWidth, proposedMax)
+            case 1:
+                // Reserve at least minDetailWidth for the detail column.
+                return proposedMax - SplitViewMetrics.minDetailWidth
+            default:
+                return proposedMax
+            }
+        }
+
+        /// Hand-roll subview resizing so the sidebar holds its current pixel width and
+        /// only the article list / reader absorb the change. NSSplitView's default
+        /// implementation redistributes proportionally to all subviews' ranges, which is
+        /// what made the sidebar grow on every inner state change.
+        func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) {
+            let subviews = splitView.arrangedSubviews
+            guard !subviews.isEmpty else { return }
+
+            let totalWidth = splitView.bounds.width
+            let totalHeight = splitView.bounds.height
+            let dividerThickness = splitView.dividerThickness
+
+            // Sidebar holds its current width, clamped to the allowed range.
+            var sidebarWidth = subviews[0].frame.width
+            if sidebarWidth <= 0 { sidebarWidth = SplitViewMetrics.defaultSidebarWidth }
+            sidebarWidth = max(SplitViewMetrics.minSidebarWidth, min(SplitViewMetrics.maxSidebarWidth, sidebarWidth))
+
+            // Don't let the sidebar squeeze the trailing columns below their minimums.
+            let trailingCount = subviews.count - 1
+            let trailingMin: CGFloat
+            switch trailingCount {
+            case 1: trailingMin = SplitViewMetrics.minContentWidth
+            case 2: trailingMin = SplitViewMetrics.minContentWidth + SplitViewMetrics.minDetailWidth + dividerThickness
+            default: trailingMin = 0
+            }
+            let maxAllowedSidebar = totalWidth - trailingMin - dividerThickness * CGFloat(trailingCount)
+            if sidebarWidth > maxAllowedSidebar {
+                sidebarWidth = max(SplitViewMetrics.minSidebarWidth, maxAllowedSidebar)
+            }
+
+            subviews[0].frame = NSRect(x: 0, y: 0, width: sidebarWidth, height: totalHeight)
+
+            if subviews.count == 2 {
+                let contentX = sidebarWidth + dividerThickness
+                let contentWidth = max(SplitViewMetrics.minContentWidth, totalWidth - contentX)
+                subviews[1].frame = NSRect(x: contentX, y: 0, width: contentWidth, height: totalHeight)
+                return
+            }
+
+            if subviews.count == 3 {
+                let availableWidth = totalWidth - sidebarWidth - dividerThickness * 2
+
+                var contentWidth: CGFloat
+                var detailWidth: CGFloat
+
+                if shouldRestoreDetailWidth, let remembered = rememberedDetailWidth {
+                    // The reader pane was just reopened — restore the user's last
+                    // detail width and give whatever's left to the content column,
+                    // clamped to the per-column minimums.
+                    detailWidth = remembered
+                    detailWidth = min(detailWidth, availableWidth - SplitViewMetrics.minContentWidth)
+                    detailWidth = max(SplitViewMetrics.minDetailWidth, detailWidth)
+                    contentWidth = availableWidth - detailWidth
+                    shouldRestoreDetailWidth = false
+                } else {
+                    let oldContentWidth = subviews[1].frame.width
+                    let oldDetailWidth = subviews[2].frame.width
+                    let oldTrailingTotal = oldContentWidth + oldDetailWidth
+                    if oldTrailingTotal > 1 {
+                        let contentRatio = oldContentWidth / oldTrailingTotal
+                        contentWidth = availableWidth * contentRatio
+                        detailWidth = availableWidth - contentWidth
+                    } else {
+                        contentWidth = SplitViewMetrics.defaultContentWidth
+                        detailWidth = availableWidth - contentWidth
+                    }
+
+                    if contentWidth < SplitViewMetrics.minContentWidth {
+                        contentWidth = SplitViewMetrics.minContentWidth
+                        detailWidth = availableWidth - contentWidth
+                    }
+                    if detailWidth < SplitViewMetrics.minDetailWidth {
+                        detailWidth = SplitViewMetrics.minDetailWidth
+                        contentWidth = availableWidth - detailWidth
+                    }
+                }
+
+                let contentX = sidebarWidth + dividerThickness
+                let detailX = contentX + contentWidth + dividerThickness
+                subviews[1].frame = NSRect(x: contentX, y: 0, width: contentWidth, height: totalHeight)
+                subviews[2].frame = NSRect(x: detailX, y: 0, width: detailWidth, height: totalHeight)
             }
         }
     }
@@ -616,7 +967,11 @@ private struct MainWeatherWidget: View {
                     }
                 }
                 .buttonStyle(.borderless)
-                .help(weather.current.map { "\($0.description) in \($0.city)\n\($0.temperature)°F • Feels like \($0.feelsLike)°F\nWind: \($0.windSpeed) mph" } ?? "Weather")
+                .help(weather.current.map { data in
+                    let tempSym = data.units.temperatureSymbol
+                    let wind = data.units.windSpeedLabel
+                    return "\(data.description) in \(data.city)\n\(data.temperature)\(tempSym) • Feels like \(data.feelsLike)\(tempSym)\nWind: \(data.windSpeed) \(wind)"
+                } ?? "Weather")
                 .popover(isPresented: $showingPopover) {
                     WeatherPopover(data: weather.current, city: displayCity)
                 }
@@ -624,7 +979,8 @@ private struct MainWeatherWidget: View {
                     weather.configure(
                         city: displayCity,
                         lat: settings.weatherLatitude,
-                        lon: settings.weatherLongitude
+                        lon: settings.weatherLongitude,
+                        units: settings.weatherUnits
                     )
                     weather.fetchIfNeeded()
                 }
@@ -632,7 +988,17 @@ private struct MainWeatherWidget: View {
                     weather.configure(
                         city: displayCity,
                         lat: settings.weatherLatitude,
-                        lon: settings.weatherLongitude
+                        lon: settings.weatherLongitude,
+                        units: settings.weatherUnits
+                    )
+                    weather.forceRefresh()
+                }
+                .onChange(of: settings.weatherUnits) { _, _ in
+                    weather.configure(
+                        city: displayCity,
+                        lat: settings.weatherLatitude,
+                        lon: settings.weatherLongitude,
+                        units: settings.weatherUnits
                     )
                     weather.forceRefresh()
                 }
@@ -660,15 +1026,16 @@ private struct WeatherPopover: View {
     let city: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if let data = data {
+                let tempSym = data.units.temperatureSymbol
                 // Header
                 HStack {
                     Image(systemName: data.icon)
                         .font(.system(size: 32))
                         .foregroundStyle(data.iconColor)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(data.temperature)°F")
+                        Text("\(data.temperature)\(tempSym)")
                             .font(.system(size: 28, weight: .medium, design: .rounded))
                         Text(data.description)
                             .font(.subheadline)
@@ -685,27 +1052,28 @@ private struct WeatherPopover: View {
                         .foregroundStyle(.blue)
                     Text(city)
                         .font(.subheadline)
+                        .foregroundStyle(.primary)
                 }
 
                 // Details grid
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                    WeatherDetailRow(icon: "thermometer.medium", label: "Feels Like", value: "\(data.feelsLike)°F")
-                    WeatherDetailRow(icon: "wind", label: "Wind", value: "\(data.windSpeed) mph")
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    WeatherDetailRow(icon: "thermometer.medium", label: "Feels Like", value: "\(data.feelsLike)\(tempSym)")
+                    WeatherDetailRow(icon: "wind", label: "Wind", value: "\(data.windSpeed) \(data.units.windSpeedLabel)")
                     WeatherDetailRow(icon: "humidity.fill", label: "Humidity", value: "\(data.humidity)%")
-                    WeatherDetailRow(icon: "arrow.up.arrow.down", label: "High/Low", value: "\(data.high)° / \(data.low)°")
+                    WeatherDetailRow(icon: "arrow.up.arrow.down", label: "High/Low", value: "\(data.high)\(tempSym) / \(data.low)\(tempSym)")
                 }
 
                 // Updated time
                 Text("Updated \(data.updatedAt, style: .relative) ago")
-                    .font(.caption2)
-                    .foregroundStyle(.quaternary)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             } else {
                 Text("Loading weather...")
                     .foregroundStyle(.secondary)
             }
         }
         .padding(16)
-        .frame(width: 260)
+        .frame(width: 280)
     }
 }
 
@@ -715,18 +1083,19 @@ private struct WeatherDetailRow: View {
     let value: String
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.caption)
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(label)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Text(value)
                     .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline)
                     .fontWeight(.medium)
+                    .foregroundStyle(.primary)
             }
         }
     }
@@ -844,6 +1213,7 @@ final class SharedWeatherService: ObservableObject {
     private var configuredCity = ""
     private var configuredLat: Double = 0
     private var configuredLon: Double = 0
+    private var configuredUnits: WeatherUnits = .fahrenheit
 
     struct WeatherData {
         let temperature: Int
@@ -856,6 +1226,8 @@ final class SharedWeatherService: ObservableObject {
         let isDay: Bool
         let city: String
         let updatedAt: Date
+        /// Units this data was fetched in — drives display symbols (°F vs °C, mph vs km/h).
+        let units: WeatherUnits
 
         var icon: String {
             switch weatherCode {
@@ -908,10 +1280,17 @@ final class SharedWeatherService: ObservableObject {
 
     private init() {}
 
-    func configure(city: String, lat: Double, lon: Double) {
+    func configure(city: String, lat: Double, lon: Double, units: WeatherUnits) {
+        let unitsChanged = units != configuredUnits
         configuredCity = city
         configuredLat = lat
         configuredLon = lon
+        configuredUnits = units
+        if unitsChanged {
+            // Invalidate cache so the next fetch hits the API with the new unit params.
+            lastFetch = nil
+            current = nil
+        }
     }
 
     func forceRefresh() {
@@ -937,9 +1316,10 @@ final class SharedWeatherService: ObservableObject {
         let lat = configuredLat
         let lon = configuredLon
         let city = configuredCity
+        let units = configuredUnits
 
         // Fetch current weather + daily high/low + hourly for humidity/feels like
-        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(lat)&longitude=\(lon)&current_weather=true&temperature_unit=fahrenheit&windspeed_unit=mph&daily=temperature_2m_max,temperature_2m_min&hourly=relativehumidity_2m,apparent_temperature&timezone=auto&forecast_days=1"
+        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(lat)&longitude=\(lon)&current_weather=true&temperature_unit=\(units.openMeteoTemperatureParameter)&windspeed_unit=\(units.openMeteoWindspeedParameter)&daily=temperature_2m_max,temperature_2m_min&hourly=relativehumidity_2m,apparent_temperature&timezone=auto&forecast_days=1"
 
         guard let url = URL(string: urlString) else {
             await MainActor.run { isLoading = false }
@@ -1000,7 +1380,8 @@ final class SharedWeatherService: ObservableObject {
                         weatherCode: code,
                         isDay: isDay == 1,
                         city: city,
-                        updatedAt: Date()
+                        updatedAt: Date(),
+                        units: units
                     )
                     self.lastFetch = Date()
                     self.isLoading = false

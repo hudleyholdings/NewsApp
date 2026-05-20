@@ -40,8 +40,25 @@ struct ArticleListView: View {
         }
         .overlay {
             if filteredArticles.isEmpty {
-                ContentUnavailableView("No Articles", systemImage: "newspaper", description: Text("Refresh to load the latest stories."))
+                emptyStateView
             }
+        }
+    }
+
+    @ViewBuilder
+    private var emptyStateView: some View {
+        if feedStore.selectedSidebarItem == .list(FeedStore.unreadID) {
+            ContentUnavailableView(
+                "All caught up",
+                systemImage: "checkmark.circle",
+                description: Text("You've read every story in your feeds.")
+            )
+        } else {
+            ContentUnavailableView(
+                "No Articles",
+                systemImage: "newspaper",
+                description: Text("Refresh to load the latest stories.")
+            )
         }
     }
 

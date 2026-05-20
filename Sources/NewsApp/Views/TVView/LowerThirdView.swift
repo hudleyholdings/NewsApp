@@ -523,7 +523,7 @@ struct TVInfoWidget: View {
                         .font(.system(size: 16))
                         .foregroundStyle(data.iconColor)
 
-                    Text("\(data.temperature)°F")
+                    Text("\(data.temperature)\(data.units.temperatureSymbol)")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
 
@@ -658,7 +658,8 @@ struct TVInfoWidget: View {
         weather.configure(
             city: displayCity,
             lat: settings.weatherLatitude,
-            lon: settings.weatherLongitude
+            lon: settings.weatherLongitude,
+            units: settings.weatherUnits
         )
         weather.fetchIfNeeded()
     }

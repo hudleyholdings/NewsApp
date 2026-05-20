@@ -375,6 +375,26 @@ struct WelcomeView: View {
                 }
             }
 
+            Divider()
+                .padding(.top, 4)
+
+            // Temperature unit picker — pre-selected based on the user's locale.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Temperature units")
+                    .font(.system(size: 13, weight: .semibold))
+                Picker("Temperature units", selection: $settings.weatherUnits) {
+                    ForEach(WeatherUnits.allCases) { unit in
+                        Text(unit.displayName).tag(unit)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text("You can change this later in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             Spacer().frame(height: 8)
 
             HStack {

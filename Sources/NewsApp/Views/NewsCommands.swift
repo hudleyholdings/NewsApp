@@ -14,6 +14,11 @@ struct NewsCommands: Commands {
                 NotificationCenter.default.post(name: .refreshAllFeeds, object: nil)
             }
             .keyboardShortcut("r", modifiers: [.command])
+
+            Button("Mark All as Read") {
+                NotificationCenter.default.post(name: .markAllAsRead, object: nil)
+            }
+            .keyboardShortcut("k", modifiers: [.command, .shift])
         }
 
         CommandGroup(after: .textFormatting) {
@@ -33,6 +38,7 @@ struct NewsCommands: Commands {
 extension Notification.Name {
     static let openFeedManager = Notification.Name("openFeedManager")
     static let refreshAllFeeds = Notification.Name("refreshAllFeeds")
+    static let markAllAsRead = Notification.Name("markAllAsRead")
     static let increaseFontSize = Notification.Name("increaseFontSize")
     static let decreaseFontSize = Notification.Name("decreaseFontSize")
     static let scrollReader = Notification.Name("scrollReader")

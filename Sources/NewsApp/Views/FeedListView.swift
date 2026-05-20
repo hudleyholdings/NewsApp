@@ -10,6 +10,10 @@ struct FeedListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            SidebarControlBar(allCategoryNames: Array(groupedFeeds.keys))
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 4)
             ScrollViewReader { proxy in
             List(selection: $feedStore.selectedSidebarItem) {
                 Section("Lists") {
@@ -28,6 +32,22 @@ struct FeedListView: View {
                         feedStore.selectedSidebarItem = .list(FeedStore.allFeedsID)
                     }
                     .listRowBackground(allSelected ? Color.accentColor.opacity(0.25) : Color.clear)
+
+                    let unreadSelected = feedStore.selectedSidebarItem == .list(FeedStore.unreadID)
+                    ListEntryRow(
+                        listID: FeedStore.unreadID,
+                        title: "Unread",
+                        subtitle: "Only unread articles",
+                        iconSystemName: "circle.inset.filled",
+                        iconURL: nil
+                    )
+                    .tag(Optional(SidebarSelection.list(FeedStore.unreadID)))
+                    .id(SidebarSelection.list(FeedStore.unreadID))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        feedStore.selectedSidebarItem = .list(FeedStore.unreadID)
+                    }
+                    .listRowBackground(unreadSelected ? Color.accentColor.opacity(0.25) : Color.clear)
 
                     let bookmarksSelected = feedStore.selectedSidebarItem == .list(FeedStore.favoritesID)
                     ListEntryRow(
@@ -67,16 +87,22 @@ struct FeedListView: View {
 
                 ForEach(sortedCategories, id: \.self) { category in
                     Section {
+                        let categorySelected = feedStore.selectedSidebarItem == .category(category)
                         CategoryHeader(
                             category: category,
-                            isSelected: feedStore.selectedSidebarItem == .category(category)
+                            isSelected: categorySelected,
+                            isCollapsed: settings.collapsedCategories.contains(category),
+                            onToggleCollapse: { settings.toggleCategoryCollapsed(category) }
                         )
+                        .tag(Optional(SidebarSelection.category(category)))
                         .id(SidebarSelection.category(category))
                         .onTapGesture {
                             feedStore.selectedSidebarItem = .category(category)
                         }
+                        .listRowBackground(categorySelected ? Color.accentColor.opacity(0.25) : Color.clear)
 
-                        ForEach(groupedFeeds[category] ?? []) { feed in
+                        if !settings.collapsedCategories.contains(category) {
+                        ForEach(visibleFeeds(in: category)) { feed in
                             let isSelected = feedStore.selectedSidebarItem == .feed(feed.id)
                             FeedRow(
                                 feed: feed,
@@ -130,6 +156,7 @@ struct FeedListView: View {
                                     Label("Delete Feed", systemImage: "trash")
                                 }
                             }
+                        }
                         }
                     }
                 }
@@ -191,7 +218,7 @@ struct FeedListView: View {
                 SidebarMiniPlayer(station: station, isPlaying: radioPlayer.isPlaying)
             }
         }
-        .frame(minWidth: 280, idealWidth: 320, maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .frame(minWidth: 240, idealWidth: 280, maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .sheet(isPresented: $showingEditSheet) {
             if let feed = feedToEdit {
                 EditFeedSheet(feed: feed, isPresented: $showingEditSheet)
@@ -199,41 +226,248 @@ struct FeedListView: View {
         }
     }
 
+    /// All feeds grouped by category. Sort within a category is handled in
+    /// `visibleFeeds(in:)` so it can respond to the live sort-mode setting.
     private var groupedFeeds: [String: [Feed]] {
         Dictionary(grouping: feedStore.feeds, by: { $0.category ?? "Other" })
-            .mapValues { $0.sorted { $0.name < $1.name } }
     }
 
+    /// Categories that should appear in the sidebar — filtered if the user toggled the
+    /// "show only with unread" filter on, then sorted per the chosen sort mode.
     private var sortedCategories: [String] {
-        let keys = groupedFeeds.keys
-        // Sort alphabetically but push Sports to the end
-        return keys.sorted { cat1, cat2 in
-            let cat1Lower = cat1.lowercased()
-            let cat2Lower = cat2.lowercased()
-            let isSports1 = cat1Lower.contains("sport")
-            let isSports2 = cat2Lower.contains("sport")
-            if isSports1 && !isSports2 { return false }
-            if !isSports1 && isSports2 { return true }
-            return cat1 < cat2
+        let visible = groupedFeeds.keys.filter { category in
+            if !settings.sidebarFilterUnreadOnly { return true }
+            return categoryUnreadCount(category) > 0
         }
+
+        switch settings.sidebarSortMode {
+        case .alphabetical:
+            return visible.sorted { cat1, cat2 in
+                let isSports1 = cat1.lowercased().contains("sport")
+                let isSports2 = cat2.lowercased().contains("sport")
+                if isSports1 && !isSports2 { return false }
+                if !isSports1 && isSports2 { return true }
+                return cat1 < cat2
+            }
+        case .byUnreadCount:
+            return visible.sorted { cat1, cat2 in
+                let a = categoryUnreadCount(cat1)
+                let b = categoryUnreadCount(cat2)
+                if a != b { return a > b }
+                return cat1 < cat2
+            }
+        }
+    }
+
+    /// Feeds inside a category after applying the unread filter and the chosen sort.
+    private func visibleFeeds(in category: String) -> [Feed] {
+        var feeds = groupedFeeds[category] ?? []
+        if settings.sidebarFilterUnreadOnly {
+            feeds = feeds.filter { feedStore.feedBadgeCount(for: $0.id, mode: .unread) > 0 }
+        }
+        switch settings.sidebarSortMode {
+        case .alphabetical:
+            return feeds.sorted { $0.name < $1.name }
+        case .byUnreadCount:
+            return feeds.sorted { a, b in
+                let aCount = feedStore.feedBadgeCount(for: a.id, mode: .unread)
+                let bCount = feedStore.feedBadgeCount(for: b.id, mode: .unread)
+                if aCount != bCount { return aCount > bCount }
+                return a.name < b.name
+            }
+        }
+    }
+
+    private func categoryUnreadCount(_ category: String) -> Int {
+        (groupedFeeds[category] ?? []).reduce(0) { partial, feed in
+            partial + feedStore.feedBadgeCount(for: feed.id, mode: .unread)
+        }
+    }
+}
+
+// MARK: - Sidebar Control Bar (Filter + Sort + Expand/Collapse)
+
+private struct SidebarControlBar: View {
+    @EnvironmentObject private var settings: SettingsStore
+    /// Every category currently present in the sidebar — used by "Collapse All" so we
+    /// know which names to insert into the collapsed-set.
+    let allCategoryNames: [String]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            FilterToggleChip(isOn: $settings.sidebarFilterUnreadOnly)
+
+            SortMenuButton(sortMode: $settings.sidebarSortMode)
+
+            // Single labeled toggle. While any category is collapsed the chip offers to
+            // expand them all; once everything is expanded it flips to "Collapse all".
+            let anyCollapsed = !settings.collapsedCategories
+                .intersection(Set(allCategoryNames)).isEmpty
+            ExpandCollapseChip(anyCollapsed: anyCollapsed) {
+                if anyCollapsed {
+                    settings.expandAllCategories()
+                } else {
+                    settings.collapseAllCategories(allCategoryNames)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct ExpandCollapseChip: View {
+    let anyCollapsed: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: anyCollapsed
+                      ? "rectangle.expand.vertical"
+                      : "rectangle.compress.vertical")
+                    .font(.system(size: 12, weight: .medium))
+                Text(anyCollapsed ? "Expand all" : "Collapse all")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(anyCollapsed ? "Expand all categories" : "Collapse all categories")
+    }
+}
+
+/// A labelled chip-style toggle so the action ("show only unread") is obvious without
+/// requiring the user to click and observe the effect.
+private struct FilterToggleChip: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isOn
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Unread only")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(isOn ? Color.accentColor : Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isOn ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(isOn ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(isOn
+              ? "Showing only feeds with unread articles — click to show all"
+              : "Show only feeds with unread articles")
+    }
+}
+
+private struct SortMenuButton: View {
+    @Binding var sortMode: SidebarSortMode
+
+    var body: some View {
+        Menu {
+            Picker("Sort by", selection: $sortMode) {
+                ForEach(SidebarSortMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 11, weight: .medium))
+                Text("Sort")
+                    .font(.system(size: 11, weight: .medium))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort feeds and categories")
+    }
+}
+
+private struct SidebarIconButton: View {
+    let systemName: String
+    let tooltip: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 22)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(tooltip)
     }
 }
 
 struct CategoryHeader: View {
     @EnvironmentObject private var feedStore: FeedStore
     @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.colorScheme) private var colorScheme
     let category: String
     let isSelected: Bool
+    let isCollapsed: Bool
+    let onToggleCollapse: () -> Void
 
     var body: some View {
         let count = feedStore.categoryBadgeCount(for: category, mode: settings.badgeCountMode)
+        let chevronColor: Color = isSelected
+            ? SidebarRowColors.title(for: colorScheme)
+            : .secondary
         HStack(spacing: 8) {
-            Color.clear
-                .frame(width: 28, height: 28)
-                .accessibilityHidden(true)
+            Button(action: onToggleCollapse) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(chevronColor)
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help(isCollapsed ? "Expand \(category)" : "Collapse \(category)")
+            // The chevron and the category-select tap-gesture share the row; this
+            // higher-priority gesture keeps chevron clicks from also selecting the
+            // category.
+            .onTapGesture {
+                onToggleCollapse()
+            }
+
             Text(category)
                 .font(settings.listFont(size: settings.feedTitleSize - 1, weight: .semibold))
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                // When the row is selected the listRowBackground paints accent — use
+                // the high-contrast label color so the title stays readable. Unselected
+                // categories keep the muted secondary tone that distinguishes them
+                // visually from feeds.
+                .foregroundStyle(isSelected ? SidebarRowColors.title(for: colorScheme) : Color.secondary)
             Spacer(minLength: 4)
             SidebarCountBadge(
                 count: count,
@@ -269,6 +503,7 @@ struct FeedRow: View {
         }
         .opacity(feed.isEnabled ? 1 : 0.5)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .help(feed.name)
     }
 }
 
@@ -317,14 +552,33 @@ struct ListEntryRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
-            SidebarCountBadge(count: count)
+            SidebarCountBadge(count: count, semanticLabel: semanticBadgeLabel)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .help(title)
+    }
+
+    /// Tooltip label for the badge on the three smart-list rows. nil for user-created lists,
+    /// which keep the existing mode-aware tooltip.
+    private var semanticBadgeLabel: String? {
+        if listID == FeedStore.allFeedsID {
+            return "Total stories across all feeds"
+        }
+        if listID == FeedStore.unreadID {
+            return "Unread articles"
+        }
+        if showBookmarkCount {
+            return "Bookmarked articles"
+        }
+        return nil
     }
 }
 
 private enum SidebarRowMetrics {
-    static let badgeColumnWidth: CGFloat = 44
+    /// Minimum reserved width for the badge column so single-digit and four-digit counts
+    /// share a consistent visual column. Wider numbers (e.g. comma-formatted 10,100+)
+    /// expand the capsule leftward via `minWidth`, keeping the trailing edge aligned.
+    static let badgeColumnMinWidth: CGFloat = 44
 }
 
 private struct SidebarCountBadge: View {
@@ -333,6 +587,10 @@ private struct SidebarCountBadge: View {
     let count: Int
     var isSelected: Bool = false
     var selectedBackground: Color? = nil
+    /// When set, this label is shown in the hover tooltip in place of the mode-derived
+    /// default. Used by smart-list rows (All Feeds = total, Unread, Bookmarks) whose
+    /// badge semantics don't match the user-controlled `BadgeCountMode`.
+    var semanticLabel: String? = nil
 
     var body: some View {
         let badgeTextColor = SidebarRowColors.badgeText(for: colorScheme)
@@ -341,6 +599,10 @@ private struct SidebarCountBadge: View {
         if count > 0 {
             if isSelected, let selectedBackground {
                 backgroundColor = selectedBackground
+            } else if semanticLabel != nil {
+                // Smart-list badges always use the neutral background — they're not
+                // tied to the "new since X" accent treatment.
+                backgroundColor = SidebarRowColors.badgeBackground(for: colorScheme)
             } else {
                 // Use a subtle accent color for "new" modes to differentiate from unread
                 switch settings.badgeCountMode {
@@ -355,6 +617,9 @@ private struct SidebarCountBadge: View {
         }
 
         let tooltipText: String = {
+            if let semanticLabel {
+                return count == 0 ? semanticLabel : "\(count.formatted(.number)) \u{2014} \(semanticLabel)"
+            }
             if count == 0 {
                 switch settings.badgeCountMode {
                 case .unread: return "All read"
@@ -365,15 +630,17 @@ private struct SidebarCountBadge: View {
             return "\(count) \(settings.badgeCountMode.shortLabel)"
         }()
 
-        return Text("\(count)")
+        return Text(count, format: .number)
             .font(.caption2)
             .foregroundStyle(count > 0 ? badgeTextColor : .clear)
             .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(count > 0 ? backgroundColor : .clear)
             .clipShape(Capsule())
-            .frame(width: SidebarRowMetrics.badgeColumnWidth, alignment: .leading)
+            .frame(minWidth: SidebarRowMetrics.badgeColumnMinWidth, alignment: .trailing)
             .help(tooltipText)
     }
 }

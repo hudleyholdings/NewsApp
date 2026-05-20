@@ -137,6 +137,16 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
                 if settings.weatherEnabled {
+                    Picker("Temperature", selection: $settings.weatherUnits) {
+                        ForEach(WeatherUnits.allCases) { unit in
+                            Text(unit.displayName).tag(unit)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.vertical, 4)
+                }
+
+                if settings.weatherEnabled {
                     // Location method picker
                     Picker("Location Source", selection: useLocationBinding) {
                         Text("Enter City Manually").tag(false)

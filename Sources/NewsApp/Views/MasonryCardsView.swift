@@ -835,7 +835,10 @@ private struct CardsWeatherWidget: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
                 }
                 .buttonStyle(.plain)
-                .help(weather.current.map { "\($0.description) in \($0.city)\n\($0.temperature)°F • Feels like \($0.feelsLike)°F" } ?? "Weather")
+                .help(weather.current.map { data in
+                    let sym = data.units.temperatureSymbol
+                    return "\(data.description) in \(data.city)\n\(data.temperature)\(sym) • Feels like \(data.feelsLike)\(sym)"
+                } ?? "Weather")
                 .popover(isPresented: $showingPopover) {
                     CardsWeatherPopover(data: weather.current, city: displayCity)
                 }
@@ -843,9 +846,19 @@ private struct CardsWeatherWidget: View {
                     weather.configure(
                         city: displayCity,
                         lat: settings.weatherLatitude,
-                        lon: settings.weatherLongitude
+                        lon: settings.weatherLongitude,
+                        units: settings.weatherUnits
                     )
                     weather.fetchIfNeeded()
+                }
+                .onChange(of: settings.weatherUnits) { _, _ in
+                    weather.configure(
+                        city: displayCity,
+                        lat: settings.weatherLatitude,
+                        lon: settings.weatherLongitude,
+                        units: settings.weatherUnits
+                    )
+                    weather.forceRefresh()
                 }
             }
         }
@@ -871,12 +884,13 @@ private struct CardsWeatherPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let data = data {
+                let tempSym = data.units.temperatureSymbol
                 HStack {
                     Image(systemName: data.icon)
                         .font(.system(size: 28))
                         .foregroundStyle(data.iconColor)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(data.temperature)°F")
+                        Text("\(data.temperature)\(tempSym)")
                             .font(.system(size: 24, weight: .medium, design: .rounded))
                         Text(data.description)
                             .font(.subheadline)
@@ -895,8 +909,8 @@ private struct CardsWeatherPopover: View {
                 }
 
                 HStack(spacing: 16) {
-                    Label("\(data.feelsLike)°", systemImage: "thermometer.medium")
-                    Label("\(data.windSpeed) mph", systemImage: "wind")
+                    Label("\(data.feelsLike)\(tempSym)", systemImage: "thermometer.medium")
+                    Label("\(data.windSpeed) \(data.units.windSpeedLabel)", systemImage: "wind")
                     Label("\(data.humidity)%", systemImage: "humidity.fill")
                 }
                 .font(.caption)

@@ -5,13 +5,23 @@ import SwiftUI
 final class FeedStore: ObservableObject {
     static let allFeedsID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     static let favoritesID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+    static let unreadID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
 
     @Published var feeds: [Feed] = []
     @Published var lists: [UserList] = []
     @Published var articlesByFeed: [UUID: [Article]] = [:] {
         didSet { invalidateArticleCache() }
     }
-    @Published var selectedSidebarItem: SidebarSelection? = .list(FeedStore.allFeedsID)
+    @Published var selectedSidebarItem: SidebarSelection? = .list(FeedStore.allFeedsID) {
+        didSet {
+            guard oldValue != selectedSidebarItem else { return }
+            updateUnreadSnapshot(forSelectionChangeFrom: oldValue, to: selectedSidebarItem)
+        }
+    }
+    /// IDs captured the moment the user entered the Unread smart list. Articles in this set
+    /// stay visible in the Unread view even after being marked read, so keyboard navigation
+    /// doesn't rug-pull. Cleared when the user navigates away.
+    @Published private(set) var unreadSnapshotIDs: Set<UUID> = []
     @Published var selectedArticleID: UUID?
     @Published var isRefreshing: Bool = false
     @Published var statusMessage: String?
@@ -225,6 +235,7 @@ final class FeedStore: ObservableObject {
         isRefreshing = false
         statusMessage = nil
         lastRefreshTime = Date()
+        extendUnreadSnapshotForRefresh()
         timer.end()
         logger.log("Refresh finished count=\(completedFeeds)")
     }
@@ -633,6 +644,9 @@ final class FeedStore: ObservableObject {
         list[index].isRead = isRead
         articlesByFeed[article.feedID] = list
         persistArticles(allArticles())
+        if isRead {
+            clearUnreadSnapshotIfAllRead()
+        }
     }
 
     func toggleStar(_ article: Article) {
@@ -708,6 +722,7 @@ final class FeedStore: ObservableObject {
             invalidateArticleCache()
             logger.log("Marked all read count=\(updatedCount)")
         }
+        clearUnreadSnapshotIfAllRead()
     }
 
     /// Clean up old articles based on retention period (preserves starred articles)
@@ -881,9 +896,21 @@ final class FeedStore: ObservableObject {
         badgeCount(for: .category(category), mode: mode)
     }
 
-    /// Get the badge count for a list based on the specified mode
+    /// Get the badge count for a list based on the specified mode.
+    ///
+    /// Smart lists have fixed badge semantics so they convey distinct information at a glance:
+    ///   - All Feeds  → total article count (library size)
+    ///   - Unread     → live unread count (independent of the snapshot used for the view)
+    ///   - Bookmarks  → handled by the row directly via `showBookmarkCount`
+    ///   - Custom lists → respect the user's `BadgeCountMode`
     func listBadgeCount(for listID: UUID, mode: BadgeCountMode) -> Int {
-        badgeCount(for: .list(listID), mode: mode)
+        if listID == FeedStore.allFeedsID {
+            return allArticles().count
+        }
+        if listID == FeedStore.unreadID {
+            return allArticles().filter { !$0.isRead }.count
+        }
+        return badgeCount(for: .list(listID), mode: mode)
     }
 
     func favoritesArticles() -> [Article] {
@@ -896,6 +923,9 @@ final class FeedStore: ObservableObject {
         }
         if id == FeedStore.favoritesID {
             return "Bookmarks"
+        }
+        if id == FeedStore.unreadID {
+            return "Unread"
         }
         return lists.first(where: { $0.id == id })?.name
     }
@@ -920,6 +950,7 @@ final class FeedStore: ObservableObject {
 
         // Lists section
         items.append(.list(FeedStore.allFeedsID))
+        items.append(.list(FeedStore.unreadID))
         items.append(.list(FeedStore.favoritesID))
         for list in lists {
             items.append(.list(list.id))
@@ -1269,12 +1300,57 @@ final class FeedStore: ObservableObject {
         if id == FeedStore.favoritesID {
             return favoritesArticles()
         }
+        if id == FeedStore.unreadID {
+            return allArticles().filter { unreadSnapshotIDs.contains($0.id) }
+        }
         guard let list = lists.first(where: { $0.id == id }) else { return [] }
         let selected = Set(list.feedIDs)
         guard !selected.isEmpty else { return [] }
         return articlesByFeed
             .filter { selected.contains($0.key) }
             .flatMap { $0.value }
+    }
+
+    // MARK: - Unread snapshot lifecycle
+
+    /// Capture the set of currently-unread article IDs. Used when entering the Unread smart list
+    /// so subsequent `isRead = true` mutations don't immediately remove rows from the visible list.
+    private func captureUnreadSnapshot() {
+        unreadSnapshotIDs = Set(allArticles().compactMap { $0.isRead ? nil : $0.id })
+    }
+
+    private func updateUnreadSnapshot(forSelectionChangeFrom previous: SidebarSelection?, to next: SidebarSelection?) {
+        let wasUnread = previous == .list(FeedStore.unreadID)
+        let isUnread = next == .list(FeedStore.unreadID)
+        if !wasUnread && isUnread {
+            captureUnreadSnapshot()
+        } else if wasUnread && !isUnread {
+            unreadSnapshotIDs = []
+        }
+    }
+
+    /// If currently in the Unread view, fold any newly-unread articles into the snapshot so
+    /// refresh results appear inline without rebuilding the existing entries.
+    private func extendUnreadSnapshotForRefresh() {
+        guard selectedSidebarItem == .list(FeedStore.unreadID) else { return }
+        for article in allArticles() where !article.isRead {
+            unreadSnapshotIDs.insert(article.id)
+        }
+    }
+
+    /// If we're in the Unread view and every article in the snapshot has been read, clear
+    /// the snapshot so the article list collapses to the "All caught up" empty state
+    /// instead of a ghost list of already-read items.
+    private func clearUnreadSnapshotIfAllRead() {
+        guard selectedSidebarItem == .list(FeedStore.unreadID) else { return }
+        guard !unreadSnapshotIDs.isEmpty else { return }
+        let snapshotIDs = unreadSnapshotIDs
+        for articles in articlesByFeed.values {
+            for article in articles where snapshotIDs.contains(article.id) && !article.isRead {
+                return
+            }
+        }
+        unreadSnapshotIDs = []
     }
 
     private func normalizeLists() {
@@ -1339,6 +1415,7 @@ final class FeedStore: ObservableObject {
         case .list(let id):
             if id != FeedStore.allFeedsID,
                id != FeedStore.favoritesID,
+               id != FeedStore.unreadID,
                !lists.contains(where: { $0.id == id }) {
                 selectedSidebarItem = .list(FeedStore.allFeedsID)
             }
