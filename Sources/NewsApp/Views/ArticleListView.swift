@@ -5,7 +5,6 @@ struct ArticleListView: View {
     @EnvironmentObject private var feedStore: FeedStore
     @EnvironmentObject private var settings: SettingsStore
     @State private var visibleCount = 120
-    private let topAnchorID = "article-list-top-anchor"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,10 +70,9 @@ struct ArticleListView: View {
         let articles = visibleArticles
         let lastID = articles.last?.id
         let showSource = feedStore.selectedSidebarItem?.listID != nil
+        let firstID = articles.first?.id
         return ScrollViewReader { proxy in
         List(selection: $feedStore.selectedArticleID) {
-            topScrollAnchor
-
             if settings.articleListStyle == .newspaper {
                 ForEach(Array(articles.enumerated()), id: \.element.id) { index, article in
                     ArticleRow(article: article, feedName: feedStore.feedName(for: article.feedID), isLead: index == 0, style: .newspaper, showSource: showSource)
@@ -117,23 +115,24 @@ struct ArticleListView: View {
                 }
             }
         }
+        .modifier(ZeroTopScrollMarginModifier())
         .id(feedStore.selectedSidebarItem)
         .onAppear {
-            scrollToTop(proxy, animated: false)
+            scrollToTop(proxy, firstID: firstID)
         }
         .onChange(of: feedStore.selectedSidebarItem) { _, _ in
             visibleCount = 120
             feedStore.selectedArticleID = nil
-            scrollToTop(proxy, animated: false)
+            scrollToTop(proxy, firstID: firstID)
         }
         .onChange(of: feedStore.searchText) { _, _ in
             visibleCount = 120
             feedStore.selectedArticleID = nil
-            scrollToTop(proxy, animated: false)
+            scrollToTop(proxy, firstID: firstID)
         }
-        .onChange(of: articles.first?.id) { _, _ in
+        .onChange(of: articles.first?.id) { _, newFirstID in
             if feedStore.selectedArticleID == nil {
-                scrollToTop(proxy, animated: false)
+                scrollToTop(proxy, firstID: newFirstID)
             }
         }
         .onChange(of: feedStore.selectedArticleID) { _, newValue in
@@ -145,28 +144,13 @@ struct ArticleListView: View {
         } // ScrollViewReader
     }
 
-    private var topScrollAnchor: some View {
-        Color.clear
-            .frame(height: 12)
-            .id(topAnchorID)
-            .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            .accessibilityHidden(true)
-    }
-
-    private func scrollToTop(_ proxy: ScrollViewProxy, animated: Bool) {
+    private func scrollToTop(_ proxy: ScrollViewProxy, firstID: UUID?) {
+        // Scroll the first story to the very top. Using the first article's id (instead of
+        // a separate spacer row) means there's no extra reserved row height above it, so
+        // its top spacing matches the gap between every other story.
+        guard let firstID else { return }
         DispatchQueue.main.async {
-            let action = {
-                proxy.scrollTo(topAnchorID, anchor: .top)
-            }
-            if animated {
-                withAnimation(.easeOut(duration: 0.16)) {
-                    action()
-                }
-            } else {
-                action()
-            }
+            proxy.scrollTo(firstID, anchor: .top)
         }
     }
 
@@ -299,17 +283,20 @@ struct ArticleRow: View {
     @ViewBuilder
     private func standardRow(condensed: Bool, isSelected: Bool, metaSize: CGFloat, metaFont: Font) -> some View {
         HStack(alignment: .top, spacing: 0) {
-            // Unread indicator column - fixed width, dot aligned with first line of headline
-            ZStack(alignment: .topTrailing) {
-                Color.clear
-                    .frame(width: 14)
-                Circle()
-                    .fill(Color.accentColor)
-                    .frame(width: 6, height: 6)
-                    .opacity(article.isRead ? 0 : 1)
-                    .padding(.top, 7)
-                    .padding(.trailing, 4)
-            }
+            // Unread indicator column. An invisible single line of the headline font sizes
+            // this column to exactly one headline line, and the dot is centered over it —
+            // so it stays aligned with the first headline line at any font size instead of
+            // drifting with a fixed top padding.
+            Text(" ")
+                .font(headlineFont)
+                .frame(width: 14)
+                .overlay(alignment: .trailing) {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 6, height: 6)
+                        .opacity(article.isRead ? 0 : 1)
+                        .padding(.trailing, 4)
+                }
 
             // Main content - cleanly left aligned
             VStack(alignment: .leading, spacing: condensed ? 4 : 6) {
@@ -417,6 +404,19 @@ struct ArticleRow: View {
     }()
 
     private static let relativeFormatter = RelativeDateTimeFormatter()
+}
+
+/// Removes the List's built-in top content inset so the first story sits flush under the
+/// toolbar. `contentMargins` is macOS 15+, so this is a no-op on macOS 14 (where the
+/// inset is small enough to not matter once the spacer row is gone).
+private struct ZeroTopScrollMarginModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.contentMargins(.top, 0, for: .scrollContent)
+        } else {
+            content
+        }
+    }
 }
 
 private struct HardScrollEdgeModifier: ViewModifier {

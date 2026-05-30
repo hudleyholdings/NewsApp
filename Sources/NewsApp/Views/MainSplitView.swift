@@ -697,6 +697,29 @@ private enum SplitViewMetrics {
     static let minContentWidth: CGFloat = 340
     static let defaultContentWidth: CGFloat = 480
     static let minDetailWidth: CGFloat = 460
+    /// UserDefaults key for the persisted sidebar width, so the divider stays where the
+    /// user left it across launches. Also readable via `@AppStorage("sidebarWidth")`.
+    static let sidebarWidthKey = "sidebarWidth"
+
+    /// The last sidebar width the user set, clamped to the allowed range; falls back to
+    /// the default when nothing has been saved yet.
+    static func savedSidebarWidth() -> CGFloat {
+        let saved = UserDefaults.standard.double(forKey: sidebarWidthKey)
+        guard saved > 0 else { return defaultSidebarWidth }
+        return max(minSidebarWidth, min(maxSidebarWidth, saved))
+    }
+
+    /// UserDefaults key for the persisted reader (detail) column width, so it stays put
+    /// across launches. The middle column flexes to fill what's left.
+    static let detailWidthKey = "readerWidth"
+
+    /// The last reader width the user set, or nil when nothing has been saved yet (so the
+    /// proportional default applies on a first run).
+    static func savedDetailWidth() -> CGFloat? {
+        let saved = UserDefaults.standard.double(forKey: detailWidthKey)
+        guard saved > 0 else { return nil }
+        return max(minDetailWidth, saved)
+    }
 }
 
 /// NSViewRepresentable wrapping `NSSplitView` with custom delegate logic that pins the
@@ -743,19 +766,38 @@ private struct PinnedSidebarSplitView<Sidebar: View, Content: View, Detail: View
         context.coordinator.contentHost = contentHost
         context.coordinator.detailHost = detailHost
 
+        // Restore the reader width the user last left, so it stays put across launches.
+        // shouldRestoreDetailWidth makes the first 3-column layout pass apply it instead
+        // of the proportional fallback.
+        context.coordinator.rememberedDetailWidth = SplitViewMetrics.savedDetailWidth()
+        context.coordinator.shouldRestoreDetailWidth = SplitViewMetrics.savedDetailWidth() != nil
+
         splitView.addArrangedSubview(sidebarHost)
         splitView.addArrangedSubview(contentHost)
         if detailVisible {
             splitView.addArrangedSubview(detailHost)
         }
 
-        // Seed initial divider positions on the next layout pass.
+        // Seed initial divider positions on the next layout pass, restoring the user's
+        // last sidebar width so it stays put across launches.
         DispatchQueue.main.async {
             let totalWidth = splitView.bounds.width
             guard totalWidth > 0 else { return }
-            splitView.setPosition(SplitViewMetrics.defaultSidebarWidth, ofDividerAt: 0)
+            let savedSidebar = SplitViewMetrics.savedSidebarWidth()
+            splitView.setPosition(savedSidebar, ofDividerAt: 0)
             if splitView.arrangedSubviews.count >= 3 {
-                let contentTrailing = SplitViewMetrics.defaultSidebarWidth + SplitViewMetrics.defaultContentWidth
+                let dividerThickness = splitView.dividerThickness
+                // Position divider 1 so the reader (detail) column keeps the width the
+                // user last left it at; the middle column fills the rest. Without this,
+                // forcing the content column to a default width snaps the reader back.
+                let detailWidth = SplitViewMetrics.savedDetailWidth() ?? SplitViewMetrics.minDetailWidth
+                let contentTrailing: CGFloat
+                if SplitViewMetrics.savedDetailWidth() != nil {
+                    contentTrailing = max(savedSidebar + SplitViewMetrics.minContentWidth,
+                                          totalWidth - detailWidth - dividerThickness)
+                } else {
+                    contentTrailing = savedSidebar + SplitViewMetrics.defaultContentWidth
+                }
                 splitView.setPosition(contentTrailing, ofDividerAt: 1)
             }
         }
@@ -781,6 +823,7 @@ private struct PinnedSidebarSplitView<Sidebar: View, Content: View, Detail: View
         } else if !detailVisible && hasDetail {
             if let detailView = nsView.arrangedSubviews.last {
                 context.coordinator.rememberedDetailWidth = detailView.frame.width
+                context.coordinator.persistDetailWidth(detailView.frame.width)
                 detailView.removeFromSuperview()
             }
         }
@@ -797,6 +840,42 @@ private struct PinnedSidebarSplitView<Sidebar: View, Content: View, Detail: View
         /// column; tells the layout to apply `rememberedDetailWidth` instead of the
         /// proportional content/detail redistribution.
         var shouldRestoreDetailWidth = false
+        /// False until the first layout pass restores the user's saved sidebar width.
+        /// Gates `splitViewDidResizeSubviews` so the initial layout (which momentarily
+        /// reports the default width) can't clobber the saved value before we apply it.
+        var hasAppliedSavedWidth = false
+
+        /// Persist the sidebar and reader widths when a divider moves. Only writes after
+        /// the saved widths have been applied (and not during a pending restore), so the
+        /// initial layout passes don't overwrite the user's saved values.
+        func splitViewDidResizeSubviews(_ notification: Notification) {
+            guard hasAppliedSavedWidth,
+                  let splitView = notification.object as? NSSplitView else { return }
+            let subviews = splitView.arrangedSubviews
+            if let sidebar = subviews.first {
+                let width = sidebar.frame.width
+                if width >= SplitViewMetrics.minSidebarWidth, width <= SplitViewMetrics.maxSidebarWidth {
+                    let stored = UserDefaults.standard.double(forKey: SplitViewMetrics.sidebarWidthKey)
+                    if abs(stored - Double(width)) > 0.5 {
+                        UserDefaults.standard.set(Double(width), forKey: SplitViewMetrics.sidebarWidthKey)
+                    }
+                }
+            }
+            // Persist the reader width only when it's actually on screen and not mid-restore.
+            if subviews.count == 3, !shouldRestoreDetailWidth {
+                persistDetailWidth(subviews[2].frame.width)
+            }
+        }
+
+        /// Write the reader width to UserDefaults, clamped to its minimum.
+        func persistDetailWidth(_ width: CGFloat) {
+            guard width >= SplitViewMetrics.minDetailWidth else { return }
+            let stored = UserDefaults.standard.double(forKey: SplitViewMetrics.detailWidthKey)
+            if abs(stored - Double(width)) > 0.5 {
+                UserDefaults.standard.set(Double(width), forKey: SplitViewMetrics.detailWidthKey)
+                rememberedDetailWidth = width
+            }
+        }
 
         func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMin: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
             switch dividerIndex {
@@ -834,9 +913,17 @@ private struct PinnedSidebarSplitView<Sidebar: View, Content: View, Detail: View
             let totalHeight = splitView.bounds.height
             let dividerThickness = splitView.dividerThickness
 
-            // Sidebar holds its current width, clamped to the allowed range.
-            var sidebarWidth = subviews[0].frame.width
-            if sidebarWidth <= 0 { sidebarWidth = SplitViewMetrics.defaultSidebarWidth }
+            // Sidebar holds its current width, clamped to the allowed range. On the very
+            // first layout pass, seed from the user's saved width so it stays put across
+            // launches instead of snapping to the default.
+            var sidebarWidth: CGFloat
+            if !hasAppliedSavedWidth {
+                sidebarWidth = SplitViewMetrics.savedSidebarWidth()
+                hasAppliedSavedWidth = true
+            } else {
+                sidebarWidth = subviews[0].frame.width
+                if sidebarWidth <= 0 { sidebarWidth = SplitViewMetrics.defaultSidebarWidth }
+            }
             sidebarWidth = max(SplitViewMetrics.minSidebarWidth, min(SplitViewMetrics.maxSidebarWidth, sidebarWidth))
 
             // Don't let the sidebar squeeze the trailing columns below their minimums.

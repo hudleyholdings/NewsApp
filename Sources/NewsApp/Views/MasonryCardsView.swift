@@ -731,25 +731,27 @@ struct NewspaperCard: View {
             // press-release logos), so the card boundary stays readable in
             // dark mode.
             if let url = article.imageURL {
-                ZStack {
-                    Rectangle().fill(Color.secondary.opacity(0.06))
-                    if let img = image {
-                        Image(nsImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else if !ImagePrefetcher.shared.hasFailed(url) {
-                        ProgressView().controlSize(.small)
+                // A flexible-width, fixed-height `Color.clear` base sizes the slot to
+                // exactly the masonry column width (Color never reports an intrinsic
+                // size), and the image fills it via `.overlay`. Filling an overlay can't
+                // push the parent wider, so a wide photo/logo is clipped to the column
+                // instead of bleeding past the card boundary.
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 180)
+                    .overlay {
+                        if let img = image {
+                            Image(nsImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } else if !ImagePrefetcher.shared.hasFailed(url) {
+                            ProgressView().controlSize(.small)
+                        }
                     }
-                }
-                // `maxWidth: .infinity` makes the ZStack honor the masonry
-                // column's proposed width instead of reporting the image's
-                // intrinsic size (wide logos at 180pt tall were ~430pt wide,
-                // bleeding past the card boundary). The follow-up `.clipped`
-                // then clips the image to the actual column width.
-                .frame(maxWidth: .infinity, maxHeight: 180)
-                .clipped()
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
+                    .background(Color.secondary.opacity(0.06))
+                    .clipped()
+                    .padding(.horizontal, 10)
+                    .padding(.top, 10)
             }
 
             // Text content
