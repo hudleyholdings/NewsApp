@@ -9,6 +9,7 @@ enum SidebarSelection: Hashable {
     case radioStation(UUID)
     case radioCategory(RadioCategory)
     case radioFavorites
+    case radioUserStations
 
     var listID: UUID? {
         if case .list(let id) = self { return id }

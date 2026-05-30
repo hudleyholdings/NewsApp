@@ -5,9 +5,15 @@ struct RadioStationListView: View {
     @EnvironmentObject private var settings: SettingsStore
     @StateObject private var radioStore = RadioStore.shared
     @StateObject private var radioPlayer = RadioPlayer.shared
+    /// Drives the Add Custom Station sheet via `.sheet(item:)` so SwiftUI is
+    /// guaranteed to have a station to edit (or `nil` sentinel for add).
+    @State private var stationSheetTarget: AddStationSheetTarget?
 
     var body: some View {
         VStack(spacing: 0) {
+            addStationBar
+            Divider()
+
             // Mini player bar if something is playing
             if let station = radioPlayer.currentStation {
                 RadioMiniPlayer(station: station)
@@ -68,10 +74,33 @@ struct RadioStationListView: View {
                                 Label("Open Website", systemImage: "safari")
                             }
                         }
+
+                        if station.isUserAdded {
+                            Divider()
+                            Button {
+                                stationSheetTarget = .edit(station)
+                            } label: {
+                                Label("Edit Station…", systemImage: "pencil")
+                            }
+                            Button(role: .destructive) {
+                                radioStore.removeUserStation(station)
+                            } label: {
+                                Label("Delete Station", systemImage: "trash")
+                            }
+                        }
                     }
                 }
             }
             .listStyle(.inset)
+        }
+        .sheet(item: $stationSheetTarget) { target in
+            AddRadioStationSheet(
+                isPresented: Binding(
+                    get: { stationSheetTarget != nil },
+                    set: { if !$0 { stationSheetTarget = nil } }
+                ),
+                existing: target.station
+            )
         }
         .overlay {
             if filteredStations.isEmpty {
@@ -98,6 +127,8 @@ struct RadioStationListView: View {
             return "All Radio Stations"
         case .radioFavorites:
             return "Favorite Stations"
+        case .radioUserStations:
+            return "My Stations"
         case .radioCategory(let category):
             return category.displayName
         default:
@@ -109,6 +140,9 @@ struct RadioStationListView: View {
         if case .radioFavorites = feedStore.selectedSidebarItem {
             return "Star stations to add them to your favorites."
         }
+        if case .radioUserStations = feedStore.selectedSidebarItem {
+            return "Add a custom station with the + button above."
+        }
         return "No stations available in this category."
     }
 
@@ -119,21 +153,77 @@ struct RadioStationListView: View {
             return radioStore.newsTalkStations
         case .radioFavorites:
             return radioStore.favoriteStations
+        case .radioUserStations:
+            return radioStore.userStations
         case .radioCategory(let category):
             // Only show if it's News/Talk
             if category == .newsTalk {
                 return radioStore.groupedByCategory[category] ?? []
             }
             return []
-        case .radioStation:
-            // Show all news/talk stations
+        case .radioStation(let id):
+            // Keep the middle column in context with the selected station: a custom
+            // station shows the custom-stations list; otherwise the news/talk list.
+            if radioStore.userStations.contains(where: { $0.id == id }) {
+                return radioStore.userStations
+            }
             return radioStore.newsTalkStations
         default:
             return []
         }
     }
 
-    private var filteredStations: [RadioStation] {
+    // MARK: - Add custom station
+
+    /// Compact bar above the list with a primary "Add Custom Station" affordance.
+    /// Visible in every radio view so a brand-new user (zero custom stations) can
+    /// still discover the entry point.
+    private var addStationBar: some View {
+        HStack {
+            Button {
+                stationSheetTarget = .add
+            } label: {
+                Label("Add Custom Station", systemImage: "plus.circle.fill")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderless)
+            .help("Add a station from a stream URL")
+            Spacer()
+            if !radioStore.userStations.isEmpty {
+                Text("\(radioStore.userStations.count) custom")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+}
+
+/// Identifiable wrapper so `.sheet(item:)` can drive both Add and Edit through one
+/// modifier. `.add` has no associated station; `.edit` carries the one to mutate.
+private enum AddStationSheetTarget: Identifiable {
+    case add
+    case edit(RadioStation)
+
+    var id: String {
+        switch self {
+        case .add: return "add"
+        case .edit(let station): return "edit-\(station.id.uuidString)"
+        }
+    }
+
+    var station: RadioStation? {
+        switch self {
+        case .add: return nil
+        case .edit(let s): return s
+        }
+    }
+}
+
+extension RadioStationListView {
+    fileprivate var filteredStations: [RadioStation] {
         let query = feedStore.searchText
         guard !query.isEmpty else { return baseStations }
         return baseStations.filter {

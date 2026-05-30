@@ -12,15 +12,25 @@ final class PolymarketService: @unchecked Sendable {
     private let gammaBaseURL = "https://gamma-api.polymarket.com"
     private let clobBaseURL = "https://clob.polymarket.com"
 
+    private static let urlCache = URLCache(memoryCapacity: 10_000_000, diskCapacity: 50_000_000)
+
     // Shared session with caching
     private static let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 15
-        config.urlCache = URLCache(memoryCapacity: 10_000_000, diskCapacity: 50_000_000)
+        config.urlCache = urlCache
         config.requestCachePolicy = .returnCacheDataElseLoad
         return URLSession(configuration: config)
     }()
+
+    static var cacheDiskUsage: Int {
+        urlCache.currentDiskUsage
+    }
+
+    static func clearCache() {
+        urlCache.removeAllCachedResponses()
+    }
 
     // MARK: - Gamma API (Market Discovery)
 

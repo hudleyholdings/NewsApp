@@ -65,6 +65,25 @@ struct ReaderView: View {
                             // Custom Polymarket reader view
                             PolymarketReaderView(article: article)
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        } else if let videoID = article.youTubeVideoID {
+                            // Custom YouTube reader: embedded player + description.
+                            YouTubeReaderView(
+                                article: article,
+                                videoID: videoID,
+                                channelName: source,
+                                maxWidth: contentMaxWidth,
+                                isExpanded: isExpanded
+                            )
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        } else if article.isRedditArticle, let redditMeta = article.redditMetadata {
+                            // Custom Reddit reader: image + clean byline + buttons.
+                            RedditReaderView(
+                                article: article,
+                                metadata: redditMeta,
+                                maxWidth: contentMaxWidth,
+                                isExpanded: isExpanded
+                            )
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                         } else {
                             ZStack(alignment: .trailing) {
                                 ReaderTextView(
@@ -83,15 +102,29 @@ struct ReaderView: View {
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
                     } else {
-                        WebView(
-                            url: article.link,
-                            blockAds: settings.blockAdsEnabled,
-                            userAgent: webUserAgent,
-                            onScroll: { offset in
-                                updateHeaderCompact(forOffset: offset)
-                            }
-                        )
+                        if article.isRedditArticle {
+                            // Reddit's Cloudflare check blocks sandboxed WKWebView
+                            // requests outright (no cookies / no JS auth), so the
+                            // preview either spins on the logo or shows a blank
+                            // page. Surface that explicitly with an open-in-browser
+                            // CTA instead of pretending it's loading.
+                            UnavailablePreviewView(
+                                title: "Reddit previews aren't available",
+                                message: "Reddit blocks in-app previews. Open the post in your browser to view it.",
+                                link: article.link
+                            )
                             .transition(.opacity)
+                        } else {
+                            WebView(
+                                url: article.link,
+                                blockAds: settings.blockAdsEnabled,
+                                userAgent: webUserAgent,
+                                onScroll: { offset in
+                                    updateHeaderCompact(forOffset: offset)
+                                }
+                            )
+                                .transition(.opacity)
+                        }
                     }
                 }
                 .animation(.easeInOut(duration: 0.2), value: currentDisplayMode)
@@ -100,7 +133,13 @@ struct ReaderView: View {
                 if settings.markReadOnOpen {
                     feedStore.markRead(article)
                 }
-                if currentDisplayMode == .reader {
+                if currentDisplayMode == .reader,
+                   !article.isYouTubeArticle,
+                   !article.isRedditArticle {
+                    // YouTube and Reddit articles have dedicated views below — the
+                    // reader extractor scrapes their landing pages and ends up with
+                    // sidebar/footer chrome ("AboutPressCopyright…") which then
+                    // appears as the article body. Skip the scrape for them.
                     await feedStore.ensureContent(for: article.id)
                 }
                 evaluateReaderFallback(for: article)
@@ -336,7 +375,13 @@ struct ReaderHeader: View {
                             .fontWeight(.medium)
                         Text("•")
                     }
-                    if !isCompact, let author = article.author, !author.isEmpty {
+                    // Show author only if it's distinct from the source feed name —
+                    // otherwise YouTube channels and single-author blogs render as
+                    // "Channel • Channel • 1 day ago".
+                    if !isCompact,
+                       let author = article.author,
+                       !author.isEmpty,
+                       author.compare(source ?? "", options: .caseInsensitive) != .orderedSame {
                         Text(author)
                             .fontWeight(.medium)
                         Text("•")
@@ -386,7 +431,8 @@ struct ReaderHeader: View {
 
                         Spacer()
                     }
-                    .font(settings.readerFont(size: max(11, settings.readerFontSize - 4), weight: .medium))
+                    .font(settings.readerFont(size: max(10, settings.readerFontSize - 6), weight: .regular))
+                    .foregroundStyle(.secondary)
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
@@ -437,8 +483,11 @@ struct ReaderHeader: View {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
+                            .padding(6)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .padding(.leading, 8)
                     .help("Expand to full width")
                 }
 
@@ -516,14 +565,11 @@ struct ReaderTextView: View {
                         Button {
                             NotificationCenter.default.post(name: .previewReaderImage, object: imageURL)
                         } label: {
-                            AsyncImage(url: imageURL) { image in
-                                image.resizable().scaledToFit()
-                            } placeholder: {
-                                Color.gray.opacity(0.2)
-                            }
-                            .frame(maxWidth: maxWidth ?? .infinity)
-                            .frame(maxHeight: isImageOnly ? 500 : 360)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            ReaderHeroImage(
+                                url: imageURL,
+                                maxWidth: maxWidth,
+                                maxHeight: isImageOnly ? 500 : 360
+                            )
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -710,6 +756,13 @@ struct ReaderTextView: View {
             return nil
         }
         removeAttachmentPlaceholders(from: attributed)
+        // Collapse any run of more than 2 consecutive newlines down to 2. Catches
+        // the dead vertical space left behind by stripped <iframe>/<audio>/<figure>
+        // embeds (Stratechery's "Listen to this post" widget, podcast players,
+        // social-card oEmbeds) — those leave standalone <br> sequences or
+        // height-styled divs that my upstream HTML sanitizer can't reliably
+        // detect, so we normalize at the output instead.
+        collapseExcessiveNewlines(in: attributed)
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = lineSpacing
         paragraphStyle.paragraphSpacing = 3  // Spacing after paragraphs
@@ -723,6 +776,31 @@ struct ReaderTextView: View {
         var swiftString = AttributedString(attributed)
         swiftString.font = font
         return swiftString
+    }
+
+    /// Walk the rendered string and delete any newline that comes after two
+    /// consecutive newlines. Preserves paragraph breaks (which are 1-2 newlines)
+    /// while squashing the larger gaps that come from stripped media.
+    nonisolated private static func collapseExcessiveNewlines(in attributed: NSMutableAttributedString) {
+        let raw = attributed.string as NSString
+        var consecutive = 0
+        var rangesToDelete: [NSRange] = []
+        for index in 0..<raw.length {
+            let char = raw.character(at: index)
+            // 0x0A == '\n', 0x0D == '\r', 0x2028/0x2029 == Unicode line/paragraph separators.
+            let isLineBreak = char == 0x0A || char == 0x0D || char == 0x2028 || char == 0x2029
+            if isLineBreak {
+                consecutive += 1
+                if consecutive > 2 {
+                    rangesToDelete.append(NSRange(location: index, length: 1))
+                }
+            } else {
+                consecutive = 0
+            }
+        }
+        for range in rangesToDelete.reversed() {
+            attributed.deleteCharacters(in: range)
+        }
     }
 
     nonisolated private static func removeAttachmentPlaceholders(from attributed: NSMutableAttributedString) {
@@ -805,6 +883,37 @@ struct ReaderTextView: View {
     }
 }
 
+/// Article hero image with a rounded-corner mask that's stable across the
+/// placeholder → loaded transition. We pre-clip inside the AsyncImage's success
+/// closure (not only on the outer container) and pass a `Transaction` with no
+/// animation, so the bitmap can't flash one frame at its intrinsic size before
+/// the outer `.frame` + `.clipShape` settle.
+private struct ReaderHeroImage: View {
+    let url: URL
+    let maxWidth: CGFloat?
+    let maxHeight: CGFloat
+
+    private static let cornerRadius: CGFloat = 14
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Self.cornerRadius)
+        AsyncImage(url: url, scale: 1, transaction: Transaction(animation: nil)) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(shape)
+            default:
+                shape.fill(Color.gray.opacity(0.2))
+            }
+        }
+        .frame(maxWidth: maxWidth ?? .infinity)
+        .frame(maxHeight: maxHeight)
+        .clipShape(shape)
+    }
+}
+
 private struct RenderRequest: Equatable {
     let html: String
     let fontFamily: ReaderFontFamily
@@ -883,5 +992,44 @@ struct KeyboardScrollAnchor: NSViewRepresentable {
         deinit {
             if let observer { NotificationCenter.default.removeObserver(observer) }
         }
+    }
+}
+
+/// Replaces the WebView in Preview mode when a site is known not to render inside
+/// `WKWebView` (currently: Reddit, which sits behind Cloudflare's bot check). Gives
+/// the user a clear explanation plus a one-click open-in-browser action so they're
+/// not staring at a blank pane wondering whether it's still loading.
+struct UnavailablePreviewView: View {
+    let title: String
+    let message: String
+    let link: URL?
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 44, weight: .regular))
+                .foregroundStyle(.secondary)
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(message)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+            if let link {
+                Button {
+                    openURL(link)
+                } label: {
+                    Label("Open in Browser", systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 4)
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

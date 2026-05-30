@@ -3,9 +3,22 @@ import AppKit
 import CoreLocation
 
 struct SettingsView: View {
+    @EnvironmentObject private var feedStore: FeedStore
     @EnvironmentObject private var settings: SettingsStore
     @StateObject private var locationManager = LocationManager()
     @State private var citySearchText = ""
+    @State private var cacheUsage: CacheStorageUsage = .empty
+    @State private var isClearingCache = false
+    @State private var showingClearCacheAlert = false
+
+    /// Reads the marketing version straight from the bundle so the About section always
+    /// matches the build that's actually shipping (CFBundleShortVersionString, set by the
+    /// build script). Build number is intentionally omitted — users care about 1.2, not
+    /// the internal build counter.
+    static var appVersionString: String {
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        return "Version \(short)"
+    }
 
     var body: some View {
         ScrollView {
@@ -29,14 +42,14 @@ struct SettingsView: View {
             }
 
             Section {
-                Picker("Quick Preset", selection: $settings.typographyPreset) {
-                    ForEach(TypographyPreset.allCases) { preset in
-                        PresetRow(preset: preset).tag(preset)
-                    }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Theme")
+                        .font(.subheadline.weight(.semibold))
+                    ThemePresetGrid(selection: $settings.typographyPreset)
+                    Text("Each card previews its own fonts. Selecting one updates the preview below and applies it everywhere.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Text("Presets adjust fonts, scale, and spacing together. Fine-tune below.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
 
                 Picker("Reader Font", selection: $settings.readerFontFamily) {
@@ -121,6 +134,7 @@ struct SettingsView: View {
 
                 Toggle("Block Ads in Preview", isOn: $settings.blockAdsEnabled)
                 Toggle("Cache Images", isOn: $settings.cacheImagesEnabled)
+                cacheStorageRow
             }
 
             Section("Preview") {
@@ -303,7 +317,7 @@ struct SettingsView: View {
                     Text("News App: RSS Reader & More")
                         .font(.headline)
                     Spacer()
-                    Text("Version 1.0")
+                    Text(Self.appVersionString)
                         .foregroundStyle(.secondary)
                 }
                 Text("An open-source RSS reader and news aggregator for macOS.")
@@ -344,9 +358,55 @@ struct SettingsView: View {
         .frame(minWidth: 600, idealWidth: 680, maxWidth: 800)
         .frame(minHeight: 600, idealHeight: 700, maxHeight: 900)
         .preferredColorScheme(settings.colorScheme)
+        .onAppear {
+            refreshCacheUsage()
+        }
         .onChange(of: settings.typographyPreset) { _, newValue in
             settings.applyPreset(newValue)
         }
+        .alert("Clear Cached Feed Items?", isPresented: $showingClearCacheAlert) {
+            Button("Clear Cache", role: .destructive) {
+                clearCachedFeedData()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes saved article items and cached images/network responses. Feeds, categories, lists, settings, and radio stations are kept.")
+        }
+    }
+
+    private var cacheStorageRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Cached Feed Items & Images")
+                    Text(cacheStorageDetailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text(formattedByteCount(cacheUsage.totalBytes))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+
+                Button(isClearingCache ? "Clearing..." : "Clear Cache...", role: .destructive) {
+                    showingClearCacheAlert = true
+                }
+                .disabled(isClearingCache || !hasCachedFeedData)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var hasCachedFeedData: Bool {
+        cacheUsage.totalBytes > 0 || !feedStore.allArticles().isEmpty
+    }
+
+    private var cacheStorageDetailText: String {
+        let itemCount = feedStore.allArticles().count
+        let itemWord = itemCount == 1 ? "item" : "items"
+        return "\(itemCount.formatted()) saved feed \(itemWord) • Articles \(formattedByteCount(cacheUsage.articleBytes)), images/network \(formattedByteCount(cacheUsage.networkCacheBytes))"
     }
 
     private var useLocationBinding: Binding<Bool> {
@@ -372,6 +432,26 @@ struct SettingsView: View {
                 citySearchText = ""
             }
         }
+    }
+
+    private func refreshCacheUsage() {
+        cacheUsage = feedStore.cacheStorageUsage()
+    }
+
+    private func clearCachedFeedData() {
+        isClearingCache = true
+        feedStore.clearCache()
+        ImagePrefetcher.shared.clearCache()
+        refreshCacheUsage()
+        isClearingCache = false
+    }
+
+    private func formattedByteCount(_ bytes: Int64) -> String {
+        guard bytes > 0 else { return "0 bytes" }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        return formatter.string(fromByteCount: bytes)
     }
 }
 
@@ -399,27 +479,72 @@ private struct SettingsWindowChromeAccessor: NSViewRepresentable {
     }
 }
 
-private struct PresetRow: View {
+/// Tappable grid of theme presets. Each card renders its sample text in the
+/// theme's actual fonts so the differences are visible at a glance — unlike a
+/// menu Picker, which forces every row into the system font.
+private struct ThemePresetGrid: View {
+    @Binding var selection: TypographyPreset
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(TypographyPreset.allCases) { preset in
+                ThemePresetCard(preset: preset, isSelected: preset == selection) {
+                    selection = preset
+                }
+            }
+        }
+    }
+}
+
+private struct ThemePresetCard: View {
     let preset: TypographyPreset
+    let isSelected: Bool
+    let onSelect: () -> Void
 
     var body: some View {
         let preview = PresetPreview(preset: preset)
-        return HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(preset.label)
-                    .font(.headline)
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(preset.label)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.4))
+                }
+
                 Text("Headline Preview")
                     .font(preview.headlineFont)
-                Text("Body preview text • 3 min read")
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text("Body text • 3 min read")
                     .font(preview.bodyFont)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(preview.tagline)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
-            Spacer()
-            Text(preview.tagline)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.15),
+                            lineWidth: isSelected ? 2 : 1)
+            )
         }
-        .padding(.vertical, 4)
+        .buttonStyle(.plain)
     }
 }
 

@@ -30,6 +30,7 @@ struct NewsAppApp: App {
 
         Settings {
             SettingsView()
+                .environmentObject(feedStore)
                 .environmentObject(settings)
         }
     }

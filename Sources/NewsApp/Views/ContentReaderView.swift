@@ -71,7 +71,7 @@ struct ContentReaderView: View {
     private var emptyStateIcon: String {
         guard let selection = feedStore.selectedSidebarItem else { return "newspaper" }
         switch selection {
-        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites:
+        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites, .radioUserStations:
             return "radio"
         default:
             return "newspaper"

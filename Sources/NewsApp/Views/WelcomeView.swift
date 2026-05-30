@@ -50,11 +50,7 @@ struct WelcomeView: View {
 
     private var welcomeStep: some View {
         VStack(spacing: 24) {
-            if let appIcon = NSApplication.shared.applicationIconImage {
-                Image(nsImage: appIcon)
-                    .resizable()
-                    .frame(width: 96, height: 96)
-            }
+            onboardingLogoView(size: 96)
 
             Text("Welcome to News App")
                 .font(.system(size: 28, weight: .bold, design: .serif))
@@ -164,11 +160,7 @@ struct WelcomeView: View {
 
     private var feedsStep: some View {
         VStack(spacing: 20) {
-            if let appIcon = NSApplication.shared.applicationIconImage {
-                Image(nsImage: appIcon)
-                    .resizable()
-                    .frame(width: 56, height: 56)
-            }
+            onboardingLogoView(size: 56)
 
             VStack(spacing: 8) {
                 Text("Add Your Feeds")
@@ -433,6 +425,27 @@ struct WelcomeView: View {
     }
 
     // MARK: - Helpers
+
+    @ViewBuilder
+    private func onboardingLogoView(size: CGFloat) -> some View {
+        if let image = onboardingLogoImage {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: size, height: size)
+        }
+    }
+
+    private var onboardingLogoImage: NSImage? {
+        if let namedImage = NSImage(named: NSImage.Name("WelcomeLogo")) {
+            return namedImage
+        }
+        if let url = Bundle.main.url(forResource: "WelcomeLogo", withExtension: "png"),
+           let bundledImage = NSImage(contentsOf: url) {
+            return bundledImage
+        }
+        return NSApplication.shared.applicationIconImage
+    }
 
     private var locationMethodBinding: Binding<Bool> {
         Binding(

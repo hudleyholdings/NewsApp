@@ -36,9 +36,26 @@ struct WebView: NSViewRepresentable {
         }
 
         guard let webView = context.coordinator.webView else { return }
-        if let url = url, webView.url != url {
-            webView.load(URLRequest(url: url))
+        if let url = url {
+            let rewritten = Self.rewriteForPreview(url)
+            if webView.url != rewritten {
+                webView.load(URLRequest(url: rewritten))
+            }
         }
+    }
+
+    /// Rewrites URLs that don't render well in `WKWebView` without JavaScript /
+    /// authentication. Currently:
+    ///   - Modern `www.reddit.com` and `reddit.com` show a perpetual logo spinner
+    ///     because the SPA never bootstraps; redirect to `old.reddit.com` which
+    ///     serves static HTML that renders cleanly in the preview pane.
+    static func rewriteForPreview(_ url: URL) -> URL {
+        guard let host = url.host?.lowercased() else { return url }
+        let isReddit = (host == "www.reddit.com" || host == "reddit.com")
+        guard isReddit else { return url }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        components.host = "old.reddit.com"
+        return components.url ?? url
     }
 
     func makeCoordinator() -> Coordinator {
@@ -76,7 +93,7 @@ struct WebView: NSViewRepresentable {
             newWebView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
         if let url = url {
-            newWebView.load(URLRequest(url: url))
+            newWebView.load(URLRequest(url: Self.rewriteForPreview(url)))
         }
     }
 }

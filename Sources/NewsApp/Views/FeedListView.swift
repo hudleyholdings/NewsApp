@@ -1,22 +1,30 @@
 import SwiftUI
+import AppKit
 
 struct FeedListView: View {
     @EnvironmentObject private var feedStore: FeedStore
     @EnvironmentObject private var settings: SettingsStore
     @StateObject private var radioStore = RadioStore.shared
     @StateObject private var radioPlayer = RadioPlayer.shared
+    /// Drives the Edit Feed sheet via `.sheet(item:)` — guarantees the feed is non-nil
+    /// when SwiftUI evaluates the sheet's content. Avoids the
+    /// `.sheet(isPresented:) { if let … }` race where the sheet could render empty.
     @State private var feedToEdit: Feed?
-    @State private var showingEditSheet = false
+    @State private var showingSidebarOrderEditor = false
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarControlBar(allCategoryNames: Array(groupedFeeds.keys))
+            SidebarControlBar(
+                allCategoryNames: allCategoryNames,
+                userListIDs: allUserListIDs,
+                onCustomizeOrder: openSidebarOrderEditor
+            )
                 .padding(.horizontal, 12)
                 .padding(.top, 6)
                 .padding(.bottom, 4)
             ScrollViewReader { proxy in
             List(selection: $feedStore.selectedSidebarItem) {
-                Section("Lists") {
+                Section {
                     let allSelected = feedStore.selectedSidebarItem == .list(FeedStore.allFeedsID)
                     ListEntryRow(
                         listID: FeedStore.allFeedsID,
@@ -66,101 +74,21 @@ struct FeedListView: View {
                     }
                     .listRowBackground(bookmarksSelected ? Color.accentColor.opacity(0.25) : Color.clear)
 
-                    ForEach(feedStore.lists) { list in
-                        let isSelected = feedStore.selectedSidebarItem == .list(list.id)
-                        ListEntryRow(
-                            listID: list.id,
-                            title: list.name,
-                            subtitle: list.feedIDs.isEmpty ? "No feeds" : "\(list.feedIDs.count) feeds",
-                            iconSystemName: nil,
-                            iconURL: list.iconURL
-                        )
-                        .tag(Optional(SidebarSelection.list(list.id)))
-                        .id(SidebarSelection.list(list.id))
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            feedStore.selectedSidebarItem = .list(list.id)
-                        }
-                        .listRowBackground(isSelected ? Color.accentColor.opacity(0.25) : Color.clear)
-                    }
                 }
 
-                ForEach(sortedCategories, id: \.self) { category in
-                    Section {
-                        let categorySelected = feedStore.selectedSidebarItem == .category(category)
-                        CategoryHeader(
-                            category: category,
-                            isSelected: categorySelected,
-                            isCollapsed: settings.collapsedCategories.contains(category),
-                            onToggleCollapse: { settings.toggleCategoryCollapsed(category) }
-                        )
-                        .tag(Optional(SidebarSelection.category(category)))
-                        .id(SidebarSelection.category(category))
-                        .onTapGesture {
-                            feedStore.selectedSidebarItem = .category(category)
-                        }
-                        .listRowBackground(categorySelected ? Color.accentColor.opacity(0.25) : Color.clear)
+                if settings.sidebarSortMode == .custom {
+                    ForEach(orderedCustomSidebarItems) { item in
+                        customSidebarItemView(item)
+                    }
+                } else {
+                    ForEach(visibleUserLists) { list in
+                        userListSection(list)
+                    }
 
-                        if !settings.collapsedCategories.contains(category) {
-                        ForEach(visibleFeeds(in: category)) { feed in
-                            let isSelected = feedStore.selectedSidebarItem == .feed(feed.id)
-                            FeedRow(
-                                feed: feed,
-                                isSelected: isSelected
-                            )
-                            .tag(Optional(SidebarSelection.feed(feed.id)))
-                            .id(SidebarSelection.feed(feed.id))
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                feedStore.selectedSidebarItem = .feed(feed.id)
-                            }
-                            .listRowBackground(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
-                            .contextMenu {
-                                Button {
-                                    feedStore.markAllAsRead(for: .feed(feed.id))
-                                } label: {
-                                    Label("Mark All as Read", systemImage: "checkmark.circle")
-                                }
-
-                                Button {
-                                    feedToEdit = feed
-                                    showingEditSheet = true
-                                } label: {
-                                    Label("Edit Feed", systemImage: "pencil")
-                                }
-
-                                if !feedStore.lists.isEmpty {
-                                    Menu("Add to List") {
-                                        ForEach(feedStore.lists) { list in
-                                            Button(list.name) {
-                                                feedStore.addFeed(feed.id, toList: list.id)
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Divider()
-
-                                Button {
-                                    feedStore.toggleFeedEnabled(feed)
-                                } label: {
-                                    Label(feed.isEnabled ? "Disable Feed" : "Enable Feed",
-                                          systemImage: feed.isEnabled ? "pause.circle" : "play.circle")
-                                }
-
-                                Divider()
-
-                                Button(role: .destructive) {
-                                    feedStore.deleteFeed(id: feed.id)
-                                } label: {
-                                    Label("Delete Feed", systemImage: "trash")
-                                }
-                            }
-                        }
-                        }
+                    ForEach(sortedCategories, id: \.self) { category in
+                        categorySection(category)
                     }
                 }
-
                 // MARK: - Radio Section (News/Talk only)
                 if settings.radioEnabled {
                     Section("Radio") {
@@ -198,6 +126,27 @@ struct FeedListView: View {
                             }
                             .listRowBackground(radioFavSelected ? Color.accentColor.opacity(0.25) : Color.clear)
                         }
+
+                        // My Stations — only surfaced once the user has added at
+                        // least one. The "Add Custom Station" button in the
+                        // station list view is the discoverable entry point for
+                        // creating the first one.
+                        if !radioStore.userStations.isEmpty {
+                            let myStationsSelected = feedStore.selectedSidebarItem == .radioUserStations
+                            MediaSectionRow(
+                                title: "My Stations",
+                                subtitle: "Custom streams you added",
+                                count: radioStore.userStations.count,
+                                icon: "antenna.radiowaves.left.and.right.circle",
+                                isSelected: myStationsSelected
+                            )
+                            .tag(Optional(SidebarSelection.radioUserStations))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                feedStore.selectedSidebarItem = .radioUserStations
+                            }
+                            .listRowBackground(myStationsSelected ? Color.accentColor.opacity(0.25) : Color.clear)
+                        }
                     }
                 }
 
@@ -219,10 +168,16 @@ struct FeedListView: View {
             }
         }
         .frame(minWidth: 240, idealWidth: 280, maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .sheet(isPresented: $showingEditSheet) {
-            if let feed = feedToEdit {
-                EditFeedSheet(feed: feed, isPresented: $showingEditSheet)
-            }
+        .sheet(item: $feedToEdit) { feed in
+            EditFeedSheet(feed: feed, isPresented: Binding(
+                get: { feedToEdit != nil },
+                set: { if !$0 { feedToEdit = nil } }
+            ))
+        }
+        .sheet(isPresented: $showingSidebarOrderEditor) {
+            SidebarOrderSheet(allCategoryNames: allCategoryNames)
+                .environmentObject(feedStore)
+                .environmentObject(settings)
         }
     }
 
@@ -232,23 +187,51 @@ struct FeedListView: View {
         Dictionary(grouping: feedStore.feeds, by: { $0.category ?? "Other" })
     }
 
-    /// Categories that should appear in the sidebar — filtered if the user toggled the
-    /// "show only with unread" filter on, then sorted per the chosen sort mode.
-    private var sortedCategories: [String] {
-        let visible = groupedFeeds.keys.filter { category in
+    private var allCategoryNames: [String] {
+        Array(groupedFeeds.keys)
+    }
+
+    private var allUserListIDs: [UUID] {
+        feedStore.lists.map(\.id)
+    }
+
+    private var visibleUserLists: [UserList] {
+        feedStore.lists.filter { list in
+            if !settings.sidebarFilterUnreadOnly { return true }
+            return feedStore.listBadgeCount(for: list.id, mode: .unread) > 0
+        }
+    }
+
+    private var visibleCategoryNames: [String] {
+        groupedFeeds.keys.filter { category in
             if !settings.sidebarFilterUnreadOnly { return true }
             return categoryUnreadCount(category) > 0
         }
+    }
+
+    private var defaultCustomSidebarItems: [SidebarCustomOrderItem] {
+        let listItems = visibleUserLists.map { SidebarCustomOrderItem.list($0.id) }
+        let categoryItems = CategorySorting
+            .applyCustom(order: settings.customCategoryOrder, to: visibleCategoryNames)
+            .map { SidebarCustomOrderItem.category($0) }
+        return listItems + categoryItems
+    }
+
+    private var orderedCustomSidebarItems: [SidebarCustomOrderItem] {
+        CategorySorting.applyCustomSidebarOrder(
+            order: settings.customSidebarItemOrder,
+            to: defaultCustomSidebarItems
+        )
+    }
+
+    /// Categories that should appear in the sidebar — filtered if the user toggled the
+    /// "show only with unread" filter on, then sorted per the chosen sort mode.
+    private var sortedCategories: [String] {
+        let visible = visibleCategoryNames
 
         switch settings.sidebarSortMode {
         case .alphabetical:
-            return visible.sorted { cat1, cat2 in
-                let isSports1 = cat1.lowercased().contains("sport")
-                let isSports2 = cat2.lowercased().contains("sport")
-                if isSports1 && !isSports2 { return false }
-                if !isSports1 && isSports2 { return true }
-                return cat1 < cat2
-            }
+            return visible.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         case .byUnreadCount:
             return visible.sorted { cat1, cat2 in
                 let a = categoryUnreadCount(cat1)
@@ -256,6 +239,8 @@ struct FeedListView: View {
                 if a != b { return a > b }
                 return cat1 < cat2
             }
+        case .custom:
+            return CategorySorting.applyCustom(order: settings.customCategoryOrder, to: Array(visible))
         }
     }
 
@@ -275,6 +260,34 @@ struct FeedListView: View {
                 if aCount != bCount { return aCount > bCount }
                 return a.name < b.name
             }
+        case .custom:
+            // Per-feed custom ordering isn't implemented yet — fall back to
+            // alphabetical so the within-a-category order is at least stable.
+            return feeds.sorted { $0.name < $1.name }
+        }
+    }
+
+    /// Feeds inside a user-created list, rendered with the same child-row behavior
+    /// as category groups.
+    private func visibleFeeds(in list: UserList) -> [Feed] {
+        let feedsByID = Dictionary(uniqueKeysWithValues: feedStore.feeds.map { ($0.id, $0) })
+        var feeds = list.feedIDs.compactMap { feedsByID[$0] }
+        if settings.sidebarFilterUnreadOnly {
+            feeds = feeds.filter { feedStore.feedBadgeCount(for: $0.id, mode: .unread) > 0 }
+        }
+
+        switch settings.sidebarSortMode {
+        case .alphabetical:
+            return feeds.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .byUnreadCount:
+            return feeds.sorted { a, b in
+                let aCount = feedStore.feedBadgeCount(for: a.id, mode: .unread)
+                let bCount = feedStore.feedBadgeCount(for: b.id, mode: .unread)
+                if aCount != bCount { return aCount > bCount }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+        case .custom:
+            return feeds.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         }
     }
 
@@ -283,31 +296,717 @@ struct FeedListView: View {
             partial + feedStore.feedBadgeCount(for: feed.id, mode: .unread)
         }
     }
+
+    @ViewBuilder
+    private func customSidebarItemView(_ item: SidebarCustomOrderItem) -> some View {
+        switch item.kind {
+        case .list:
+            if let id = UUID(uuidString: item.value),
+               let list = visibleUserLists.first(where: { $0.id == id }) {
+                userListSection(list)
+            }
+        case .category:
+            if visibleCategoryNames.contains(item.value) {
+                categorySection(item.value)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func userListSection(_ list: UserList) -> some View {
+        Section {
+            let isSelected = feedStore.selectedSidebarItem == .list(list.id)
+            CategoryHeader(
+                category: list.name,
+                unreadCount: feedStore.listBadgeCount(for: list.id, mode: .unread),
+                isSelected: isSelected,
+                isCollapsed: settings.collapsedListIDs.contains(list.id),
+                onToggleCollapse: { settings.toggleListCollapsed(list.id) }
+            )
+            .equatable()
+            .tag(Optional(SidebarSelection.list(list.id)))
+            .id(SidebarSelection.list(list.id))
+            .onTapGesture {
+                feedStore.selectedSidebarItem = .list(list.id)
+            }
+            .listRowBackground(isSelected ? Color.accentColor.opacity(0.25) : Color.clear)
+            .contextMenu {
+                Button {
+                    feedStore.markAllAsRead(for: .list(list.id))
+                } label: {
+                    Label("Mark All as Read", systemImage: "checkmark.circle")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    feedStore.removeList(id: list.id)
+                } label: {
+                    Label("Delete List", systemImage: "trash")
+                }
+            }
+
+            if !settings.collapsedListIDs.contains(list.id) {
+                ForEach(visibleFeeds(in: list)) { feed in
+                    feedRow(feed)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func categorySection(_ category: String) -> some View {
+        Section {
+            let categorySelected = feedStore.selectedSidebarItem == .category(category)
+            CategoryHeader(
+                category: category,
+                unreadCount: categoryUnreadCount(category),
+                isSelected: categorySelected,
+                isCollapsed: settings.collapsedCategories.contains(category),
+                onToggleCollapse: { settings.toggleCategoryCollapsed(category) }
+            )
+            .equatable()
+            .tag(Optional(SidebarSelection.category(category)))
+            .id(SidebarSelection.category(category))
+            .onTapGesture {
+                feedStore.selectedSidebarItem = .category(category)
+            }
+            .listRowBackground(categorySelected ? Color.accentColor.opacity(0.25) : Color.clear)
+            .contextMenu {
+                Button {
+                    feedStore.markAllAsRead(for: .category(category))
+                } label: {
+                    Label("Mark All as Read", systemImage: "checkmark.circle")
+                }
+            }
+
+            if !settings.collapsedCategories.contains(category) {
+                ForEach(visibleFeeds(in: category)) { feed in
+                    feedRow(feed)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func feedRow(_ feed: Feed) -> some View {
+        let isSelected = feedStore.selectedSidebarItem == .feed(feed.id)
+        FeedRow(
+            feed: feed,
+            unreadCount: feedStore.feedBadgeCount(for: feed.id, mode: .unread),
+            isSelected: isSelected
+        )
+        .equatable()
+        .tag(Optional(SidebarSelection.feed(feed.id)))
+        .id(SidebarSelection.feed(feed.id))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            feedStore.selectedSidebarItem = .feed(feed.id)
+        }
+        .listRowBackground(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+        .contextMenu {
+            Button {
+                feedStore.markAllAsRead(for: .feed(feed.id))
+            } label: {
+                Label("Mark All as Read", systemImage: "checkmark.circle")
+            }
+
+            Button {
+                feedToEdit = feed
+            } label: {
+                Label("Edit Feed", systemImage: "pencil")
+            }
+
+            if !feedStore.lists.isEmpty {
+                Menu("Add to List") {
+                    ForEach(feedStore.lists) { list in
+                        Button(list.name) {
+                            feedStore.addFeed(feed.id, toList: list.id)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button {
+                feedStore.toggleFeedEnabled(feed)
+            } label: {
+                Label(feed.isEnabled ? "Disable Feed" : "Enable Feed",
+                      systemImage: feed.isEnabled ? "pause.circle" : "play.circle")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                feedStore.deleteFeed(id: feed.id)
+            } label: {
+                Label("Delete Feed", systemImage: "trash")
+            }
+        }
+    }
+
+    private func openSidebarOrderEditor() {
+        settings.sidebarSortMode = .custom
+        showingSidebarOrderEditor = true
+    }
+}
+
+// MARK: - Category Sorting
+
+/// Helpers for applying the user-defined custom category order. Lifted to file
+/// scope so MasonryCardsView (cards/newspaper layout) can share the same logic.
+enum CategorySorting {
+    /// Categories listed in `order` come first in their listed sequence; the rest
+    /// fall through to alphabetical. Ensures newly-discovered categories don't
+    /// vanish just because the user hasn't ranked them yet.
+    static func applyCustom(order: [String], to categories: [String]) -> [String] {
+        let orderIndex = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
+        return categories.sorted { a, b in
+            switch (orderIndex[a], orderIndex[b]) {
+            case let (lhs?, rhs?): return lhs < rhs
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return a < b
+            }
+        }
+    }
+
+    static func applyCustomSidebarOrder(
+        order: [SidebarCustomOrderItem],
+        to items: [SidebarCustomOrderItem]
+    ) -> [SidebarCustomOrderItem] {
+        let available = Set(items)
+        let saved = order.filter { available.contains($0) }
+        let savedSet = Set(saved)
+        return saved + items.filter { !savedSet.contains($0) }
+    }
+}
+
+// MARK: - Sidebar Order Editor
+
+private struct SidebarOrderSheet: View {
+    @EnvironmentObject private var feedStore: FeedStore
+    @EnvironmentObject private var settings: SettingsStore
+    @Environment(\.dismiss) private var dismiss
+    let allCategoryNames: [String]
+    @State private var selectedItemID: String?
+
+    private var orderedCategories: [String] {
+        CategorySorting.applyCustom(order: settings.customCategoryOrder, to: allCategoryNames)
+    }
+
+    private var defaultOrder: [SidebarCustomOrderItem] {
+        feedStore.lists.map { SidebarCustomOrderItem.list($0.id) }
+            + orderedCategories.map { SidebarCustomOrderItem.category($0) }
+    }
+
+    private var orderedItems: [SidebarCustomOrderItem] {
+        CategorySorting.applyCustomSidebarOrder(
+            order: settings.customSidebarItemOrder,
+            to: defaultOrder
+        )
+    }
+
+    private var rowItems: [SidebarOrderItem] {
+        orderedItems.compactMap { item in
+            switch item.kind {
+            case .list:
+                guard let id = UUID(uuidString: item.value),
+                      let list = feedStore.lists.first(where: { $0.id == id }) else { return nil }
+                return SidebarOrderItem(
+                    id: item.id,
+                    title: list.name,
+                    subtitle: list.feedIDs.isEmpty ? "No feeds" : "\(list.feedIDs.count) feeds",
+                    systemImage: "list.bullet"
+                )
+            case .category:
+                guard allCategoryNames.contains(item.value) else { return nil }
+                let count = categoryFeedCount(item.value)
+                return SidebarOrderItem(
+                    id: item.id,
+                    title: item.value,
+                    subtitle: count == 1 ? "1 feed" : "\(count) feeds",
+                    systemImage: "folder"
+                )
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Sidebar Order")
+                    .font(.headline)
+
+                Spacer()
+
+                SidebarIconButton(systemName: "arrow.up", tooltip: "Move Up") {
+                    moveSelection(by: -1)
+                }
+                .disabled(!canMoveSelectionUp)
+
+                SidebarIconButton(systemName: "arrow.down", tooltip: "Move Down") {
+                    moveSelection(by: 1)
+                }
+                .disabled(!canMoveSelectionDown)
+
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            if rowItems.isEmpty {
+                ContentUnavailableView(
+                    "No Custom Items",
+                    systemImage: "list.bullet"
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                SidebarOrderTable(
+                    items: rowItems,
+                    selectedID: $selectedItemID,
+                    onMove: moveItem
+                )
+            }
+        }
+        .frame(width: 520, height: 520)
+        .onAppear {
+            settings.sidebarSortMode = .custom
+            normalizeOrder()
+        }
+    }
+
+    private var canMoveSelectionUp: Bool {
+        guard let selectedItemID,
+              let index = rowItems.firstIndex(where: { $0.id == selectedItemID }) else { return false }
+        return index > 0
+    }
+
+    private var canMoveSelectionDown: Bool {
+        guard let selectedItemID,
+              let index = rowItems.firstIndex(where: { $0.id == selectedItemID }) else { return false }
+        return index < rowItems.count - 1
+    }
+
+    private func moveSelection(by delta: Int) {
+        guard let selectedItemID,
+              let sourceIndex = rowItems.firstIndex(where: { $0.id == selectedItemID }) else { return }
+        let destination = min(max(sourceIndex + delta, 0), rowItems.count - 1)
+        moveItem(id: selectedItemID, to: destination)
+    }
+
+    private func moveItem(id: String, to destination: Int) {
+        withAnimation(.snappy(duration: 0.18)) {
+            var order = orderedItems
+            guard let sourceIndex = order.firstIndex(where: { $0.id == id }) else { return }
+            let item = order.remove(at: sourceIndex)
+            let targetIndex = min(max(destination, 0), order.count)
+            order.insert(item, at: targetIndex)
+            persist(order)
+            selectedItemID = id
+        }
+    }
+
+    private func normalizeOrder() {
+        persist(orderedItems)
+    }
+
+    private func categoryFeedCount(_ category: String) -> Int {
+        feedStore.feeds.filter { ($0.category ?? "Other") == category }.count
+    }
+
+    private func persist(_ order: [SidebarCustomOrderItem]) {
+        settings.customSidebarItemOrder = order
+        settings.customCategoryOrder = order.compactMap { item in
+            item.kind == .category ? item.value : nil
+        }
+        feedStore.reorderLists(matching: order.compactMap { item in
+            guard item.kind == .list else { return nil }
+            return UUID(uuidString: item.value)
+        })
+    }
+}
+
+private struct SidebarOrderItem: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let systemImage: String
+}
+
+private struct SidebarOrderTable: NSViewRepresentable {
+    let items: [SidebarOrderItem]
+    @Binding var selectedID: String?
+    let onMove: (String, Int) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let tableView = NSTableView()
+        tableView.headerView = nil
+        tableView.rowHeight = 44
+        tableView.intercellSpacing = NSSize(width: 0, height: 2)
+        tableView.selectionHighlightStyle = .regular
+        tableView.allowsMultipleSelection = false
+        tableView.allowsEmptySelection = true
+        tableView.backgroundColor = .clear
+        tableView.usesAlternatingRowBackgroundColors = false
+        tableView.draggingDestinationFeedbackStyle = .none
+        tableView.setDraggingSourceOperationMask(.move, forLocal: true)
+        tableView.registerForDraggedTypes([.newsAppSidebarOrderItem])
+
+        let column = NSTableColumn(identifier: .newsAppSidebarOrderColumn)
+        column.resizingMask = .autoresizingMask
+        tableView.addTableColumn(column)
+
+        tableView.dataSource = context.coordinator
+        tableView.delegate = context.coordinator
+        context.coordinator.tableView = tableView
+
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.documentView = tableView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let tableView = scrollView.documentView as? NSTableView else { return }
+        tableView.tableColumns.first?.width = max(scrollView.contentView.bounds.width, 100)
+        tableView.reloadData()
+        context.coordinator.syncSelection(in: tableView)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+        var parent: SidebarOrderTable
+        weak var tableView: NSTableView?
+        private var dropRow: Int?
+
+        init(parent: SidebarOrderTable) {
+            self.parent = parent
+        }
+
+        func numberOfRows(in tableView: NSTableView) -> Int {
+            parent.items.count + (dropRow == nil ? 0 : 1)
+        }
+
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            if isDropGapRow(row) { return 16 }
+            return 44
+        }
+
+        func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+            if isDropGapRow(row) {
+                let cell = tableView.makeView(
+                    withIdentifier: .newsAppSidebarOrderGapCell,
+                    owner: self
+                ) as? SidebarOrderGapCell ?? SidebarOrderGapCell()
+                cell.identifier = .newsAppSidebarOrderGapCell
+                return cell
+            }
+
+            guard let itemIndex = itemIndex(forDisplayRow: row),
+                  parent.items.indices.contains(itemIndex) else { return nil }
+            let cell = tableView.makeView(
+                withIdentifier: .newsAppSidebarOrderCell,
+                owner: self
+            ) as? SidebarOrderTableCell ?? SidebarOrderTableCell()
+            cell.identifier = .newsAppSidebarOrderCell
+            cell.configure(with: parent.items[itemIndex])
+            return cell
+        }
+
+        func tableViewSelectionDidChange(_ notification: Notification) {
+            guard let tableView else { return }
+            let row = tableView.selectedRow
+            let selected = itemIndex(forDisplayRow: row).flatMap { index in
+                parent.items.indices.contains(index) ? parent.items[index].id : nil
+            }
+            if parent.selectedID != selected {
+                parent.selectedID = selected
+            }
+        }
+
+        func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+            guard let itemIndex = itemIndex(forDisplayRow: row),
+                  parent.items.indices.contains(itemIndex) else { return nil }
+            let pasteboardItem = NSPasteboardItem()
+            pasteboardItem.setString(parent.items[itemIndex].id, forType: .newsAppSidebarOrderItem)
+            return pasteboardItem
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            draggingSession session: NSDraggingSession,
+            willBeginAt screenPoint: NSPoint,
+            forRowIndexes rowIndexes: IndexSet
+        ) {
+            clearDropGap(in: tableView)
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            draggingSession session: NSDraggingSession,
+            endedAt screenPoint: NSPoint,
+            operation: NSDragOperation
+        ) {
+            clearDropGap(in: tableView)
+            syncSelection(in: tableView)
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            validateDrop info: NSDraggingInfo,
+            proposedRow row: Int,
+            proposedDropOperation dropOperation: NSTableView.DropOperation
+        ) -> NSDragOperation {
+            let proposedRow = insertionRow(fromDisplayRow: row)
+            guard let draggedID = draggedItemID(from: info),
+                  let sourceIndex = parent.items.firstIndex(where: { $0.id == draggedID }),
+                  proposedRow != sourceIndex,
+                  proposedRow != sourceIndex + 1 else {
+                clearDropGap(in: tableView)
+                return []
+            }
+            showDropGap(at: proposedRow, in: tableView)
+            return .move
+        }
+
+        func tableView(
+            _ tableView: NSTableView,
+            acceptDrop info: NSDraggingInfo,
+            row: Int,
+            dropOperation: NSTableView.DropOperation
+        ) -> Bool {
+            let proposedRow = insertionRow(fromDisplayRow: row)
+            guard let draggedID = draggedItemID(from: info),
+                  let sourceIndex = parent.items.firstIndex(where: { $0.id == draggedID }) else {
+                clearDropGap(in: tableView)
+                return false
+            }
+            let destination = sourceIndex < proposedRow ? proposedRow - 1 : proposedRow
+            guard destination != sourceIndex else {
+                clearDropGap(in: tableView)
+                return false
+            }
+            clearDropGap(in: tableView)
+            parent.onMove(draggedID, destination)
+            parent.selectedID = draggedID
+            return true
+        }
+
+        func syncSelection(in tableView: NSTableView) {
+            guard let selectedID = parent.selectedID,
+                  let itemIndex = parent.items.firstIndex(where: { $0.id == selectedID }) else {
+                tableView.deselectAll(nil)
+                return
+            }
+
+            let displayRow = displayRow(forItemAt: itemIndex)
+            if tableView.selectedRow != displayRow {
+                tableView.selectRowIndexes(IndexSet(integer: displayRow), byExtendingSelection: false)
+                tableView.scrollRowToVisible(displayRow)
+            }
+        }
+
+        private func showDropGap(at row: Int, in tableView: NSTableView) {
+            let boundedRow = min(max(row, 0), parent.items.count)
+            guard dropRow != boundedRow else { return }
+            dropRow = boundedRow
+            tableView.reloadData()
+        }
+
+        private func clearDropGap(in tableView: NSTableView) {
+            guard dropRow != nil else { return }
+            dropRow = nil
+            tableView.reloadData()
+        }
+
+        private func isDropGapRow(_ displayRow: Int) -> Bool {
+            dropRow == displayRow
+        }
+
+        private func displayRow(forItemAt itemIndex: Int) -> Int {
+            if let dropRow, itemIndex >= dropRow {
+                return itemIndex + 1
+            }
+            return itemIndex
+        }
+
+        private func itemIndex(forDisplayRow displayRow: Int) -> Int? {
+            guard displayRow >= 0 else { return nil }
+            if let dropRow {
+                if displayRow == dropRow { return nil }
+                let itemIndex = displayRow > dropRow ? displayRow - 1 : displayRow
+                return parent.items.indices.contains(itemIndex) ? itemIndex : nil
+            }
+            return parent.items.indices.contains(displayRow) ? displayRow : nil
+        }
+
+        private func insertionRow(fromDisplayRow displayRow: Int) -> Int {
+            var row = min(max(displayRow, 0), parent.items.count + (dropRow == nil ? 0 : 1))
+            if let dropRow, row > dropRow {
+                row -= 1
+            }
+            return min(max(row, 0), parent.items.count)
+        }
+
+        private func draggedItemID(from info: NSDraggingInfo) -> String? {
+            info.draggingPasteboard.string(forType: .newsAppSidebarOrderItem)
+        }
+    }
+}
+
+private final class SidebarOrderTableCell: NSTableCellView {
+    private let symbolView = NSImageView()
+    private let titleField = NSTextField(labelWithString: "")
+    private let subtitleField = NSTextField(labelWithString: "")
+    private let textStack = NSStackView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    func configure(with item: SidebarOrderItem) {
+        let image = NSImage(systemSymbolName: item.systemImage, accessibilityDescription: nil)
+        image?.isTemplate = true
+        symbolView.image = image
+        titleField.stringValue = item.title
+        subtitleField.stringValue = item.subtitle
+    }
+
+    private func setup() {
+        guard symbolView.superview == nil else { return }
+
+        symbolView.translatesAutoresizingMaskIntoConstraints = false
+        symbolView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        symbolView.contentTintColor = .secondaryLabelColor
+
+        titleField.font = .systemFont(ofSize: 13, weight: .medium)
+        titleField.lineBreakMode = .byTruncatingTail
+        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        subtitleField.font = .systemFont(ofSize: 11)
+        subtitleField.textColor = .secondaryLabelColor
+        subtitleField.lineBreakMode = .byTruncatingTail
+        subtitleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 1
+        textStack.addArrangedSubview(titleField)
+        textStack.addArrangedSubview(subtitleField)
+
+        addSubview(symbolView)
+        addSubview(textStack)
+
+        NSLayoutConstraint.activate([
+            symbolView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            symbolView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            symbolView.widthAnchor.constraint(equalToConstant: 24),
+            symbolView.heightAnchor.constraint(equalToConstant: 24),
+
+            textStack.leadingAnchor.constraint(equalTo: symbolView.trailingAnchor, constant: 8),
+            textStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            textStack.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+}
+
+private final class SidebarOrderGapCell: NSTableCellView {
+    private let line = NSBox()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        guard line.superview == nil else { return }
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
+        layer?.cornerRadius = 5
+
+        line.translatesAutoresizingMaskIntoConstraints = false
+        line.boxType = .custom
+        line.borderWidth = 0
+        line.fillColor = .controlAccentColor
+        line.cornerRadius = 1
+        addSubview(line)
+
+        NSLayoutConstraint.activate([
+            line.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            line.centerYAnchor.constraint(equalTo: centerYAnchor),
+            line.heightAnchor.constraint(equalToConstant: 2)
+        ])
+    }
+}
+
+private extension NSPasteboard.PasteboardType {
+    static let newsAppSidebarOrderItem = NSPasteboard.PasteboardType("com.hudleyholdings.newsapp.sidebar-order-item")
+}
+
+private extension NSUserInterfaceItemIdentifier {
+    static let newsAppSidebarOrderColumn = NSUserInterfaceItemIdentifier("newsAppSidebarOrderColumn")
+    static let newsAppSidebarOrderCell = NSUserInterfaceItemIdentifier("newsAppSidebarOrderCell")
+    static let newsAppSidebarOrderGapCell = NSUserInterfaceItemIdentifier("newsAppSidebarOrderGapCell")
 }
 
 // MARK: - Sidebar Control Bar (Filter + Sort + Expand/Collapse)
 
 private struct SidebarControlBar: View {
     @EnvironmentObject private var settings: SettingsStore
-    /// Every category currently present in the sidebar — used by "Collapse All" so we
-    /// know which names to insert into the collapsed-set.
+    /// Every reorderable group currently present in the sidebar. The expand/collapse
+    /// chip should treat user lists and categories the same way.
     let allCategoryNames: [String]
+    let userListIDs: [UUID]
+    let onCustomizeOrder: () -> Void
 
     var body: some View {
         HStack(spacing: 4) {
             FilterToggleChip(isOn: $settings.sidebarFilterUnreadOnly)
 
-            SortMenuButton(sortMode: $settings.sidebarSortMode)
+            SidebarSortMenuButton(
+                sortMode: $settings.sidebarSortMode,
+                onCustomizeOrder: onCustomizeOrder
+            )
+            .frame(width: 56, height: 22)
 
-            // Single labeled toggle. While any category is collapsed the chip offers to
+            // Single labeled toggle. While any group is collapsed the chip offers to
             // expand them all; once everything is expanded it flips to "Collapse all".
-            let anyCollapsed = !settings.collapsedCategories
-                .intersection(Set(allCategoryNames)).isEmpty
+            let anyCollapsed = !settings.collapsedCategories.intersection(Set(allCategoryNames)).isEmpty
+                || !settings.collapsedListIDs.intersection(Set(userListIDs)).isEmpty
             ExpandCollapseChip(anyCollapsed: anyCollapsed) {
                 if anyCollapsed {
                     settings.expandAllCategories()
+                    settings.expandAllLists()
                 } else {
                     settings.collapseAllCategories(allCategoryNames)
+                    settings.collapseAllLists(userListIDs)
                 }
             }
 
@@ -327,13 +1026,14 @@ private struct ExpandCollapseChip: View {
                       ? "rectangle.expand.vertical"
                       : "rectangle.compress.vertical")
                     .font(.system(size: 12, weight: .medium))
-                Text(anyCollapsed ? "Expand all" : "Collapse all")
+                Text(anyCollapsed ? "Expand" : "Collapse")
                     .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
             }
-            .foregroundStyle(Color.primary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 6)
+            .frame(height: 22)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
@@ -355,15 +1055,17 @@ private struct FilterToggleChip: View {
                       ? "line.3.horizontal.decrease.circle.fill"
                       : "line.3.horizontal.decrease.circle")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Unread only")
+                    .foregroundStyle(isOn ? Color.accentColor : .primary)
+                Text(isOn ? "Unread Only" : "All Feeds")
                     .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
             }
-            .foregroundStyle(isOn ? Color.accentColor : Color.primary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .frame(height: 22)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isOn ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+                    .fill(isOn ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.06))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
@@ -378,35 +1080,100 @@ private struct FilterToggleChip: View {
     }
 }
 
-private struct SortMenuButton: View {
+private struct SidebarSortMenuButton: NSViewRepresentable {
     @Binding var sortMode: SidebarSortMode
+    let onCustomizeOrder: () -> Void
 
-    var body: some View {
-        Menu {
-            Picker("Sort by", selection: $sortMode) {
-                ForEach(SidebarSortMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
-                }
-            }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 11, weight: .medium))
-                Text("Sort")
-                    .font(.system(size: 11, weight: .medium))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-            }
-            .foregroundStyle(Color.primary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
-            .contentShape(Rectangle())
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.image = NSImage(systemSymbolName: "arrow.up.arrow.down", accessibilityDescription: "Sort")
+        button.image?.isTemplate = true
+        button.imagePosition = .imageLeading
+        button.title = "Sort"
+        button.font = .systemFont(ofSize: 11, weight: .medium)
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 6
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        context.coordinator.button = button
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.button = button
+        button.toolTip = "Sort: \(sortMode.label)"
+        // Use `labelColor` (a system-managed appearance-aware color) so the
+        // glyph and title stay legible against the sidebar in both light and
+        // dark mode. Custom-order mode swaps to the accent color as the
+        // active-state indicator.
+        button.contentTintColor = sortMode == .custom ? NSColor.controlAccentColor : NSColor.labelColor
+        button.attributedTitle = NSAttributedString(
+            string: "Sort",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .foregroundColor: NSColor.labelColor
+            ]
+        )
+        button.layer?.backgroundColor = (sortMode == .custom
+            ? NSColor.controlAccentColor.withAlphaComponent(0.12)
+            : NSColor.labelColor.withAlphaComponent(0.06)
+        ).cgColor
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var parent: SidebarSortMenuButton
+        weak var button: NSButton?
+
+        init(parent: SidebarSortMenuButton) {
+            self.parent = parent
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Sort feeds and categories")
+
+        @objc func showMenu(_ sender: NSButton) {
+            let menu = NSMenu()
+
+            for mode in SidebarSortMode.allCases {
+                let item = NSMenuItem(
+                    title: mode.label,
+                    action: #selector(selectSortMode(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = mode.rawValue
+                item.state = parent.sortMode == mode ? .on : .off
+                menu.addItem(item)
+            }
+
+            menu.addItem(.separator())
+
+            let customizeItem = NSMenuItem(
+                title: "Customize Order...",
+                action: #selector(customizeOrder(_:)),
+                keyEquivalent: ""
+            )
+            customizeItem.target = self
+            customizeItem.image = NSImage(systemSymbolName: "list.bullet", accessibilityDescription: nil)
+            menu.addItem(customizeItem)
+
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
+        }
+
+        @objc func selectSortMode(_ sender: NSMenuItem) {
+            guard let rawValue = sender.representedObject as? String,
+                  let mode = SidebarSortMode(rawValue: rawValue) else { return }
+            parent.sortMode = mode
+        }
+
+        @objc func customizeOrder(_ sender: NSMenuItem) {
+            parent.sortMode = .custom
+            parent.onCustomizeOrder()
+        }
     }
 }
 
@@ -429,17 +1196,28 @@ private struct SidebarIconButton: View {
     }
 }
 
-struct CategoryHeader: View {
-    @EnvironmentObject private var feedStore: FeedStore
+struct CategoryHeader: View, Equatable {
     @EnvironmentObject private var settings: SettingsStore
     @Environment(\.colorScheme) private var colorScheme
     let category: String
+    let unreadCount: Int
     let isSelected: Bool
     let isCollapsed: Bool
     let onToggleCollapse: () -> Void
 
+    /// Like `FeedRow`, this row is on the hot path and must skip body execution when
+    /// its displayed values haven't changed. The closure is excluded from equality —
+    /// it captures the category name (which is in the equality check) and the
+    /// settings store reference, both stable across renders.
+    nonisolated static func == (lhs: CategoryHeader, rhs: CategoryHeader) -> Bool {
+        lhs.category == rhs.category
+            && lhs.unreadCount == rhs.unreadCount
+            && lhs.isSelected == rhs.isSelected
+            && lhs.isCollapsed == rhs.isCollapsed
+    }
+
     var body: some View {
-        let count = feedStore.categoryBadgeCount(for: category, mode: settings.badgeCountMode)
+        let count = unreadCount
         let chevronColor: Color = isSelected
             ? SidebarRowColors.title(for: colorScheme)
             : .secondary
@@ -481,16 +1259,28 @@ struct CategoryHeader: View {
     }
 }
 
-struct FeedRow: View {
-    @EnvironmentObject private var feedStore: FeedStore
+struct FeedRow: View, Equatable {
     @EnvironmentObject private var settings: SettingsStore
     @Environment(\.colorScheme) private var colorScheme
     let feed: Feed
+    let unreadCount: Int
     let isSelected: Bool
+
+    /// Hot path during refresh — sidebar may have hundreds of these. Equatable lets
+    /// SwiftUI skip body execution for rows whose displayed values didn't change in
+    /// the current update tick. `feedStore` is intentionally NOT observed here so
+    /// per-flush invalidations don't propagate through every row.
+    nonisolated static func == (lhs: FeedRow, rhs: FeedRow) -> Bool {
+        lhs.feed.id == rhs.feed.id
+            && lhs.feed.name == rhs.feed.name
+            && lhs.feed.iconURL == rhs.feed.iconURL
+            && lhs.feed.isEnabled == rhs.feed.isEnabled
+            && lhs.unreadCount == rhs.unreadCount
+            && lhs.isSelected == rhs.isSelected
+    }
 
     var body: some View {
         let titleColor = SidebarRowColors.title(for: colorScheme)
-        let count = feedStore.feedBadgeCount(for: feed.id, mode: settings.badgeCountMode)
         HStack(spacing: 8) {
             FeedIconView(iconURL: feed.iconURL, siteURL: feed.siteURL ?? feed.feedURL, fallbackText: feed.name)
             Text(feed.name)
@@ -499,7 +1289,7 @@ struct FeedRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
-            SidebarCountBadge(count: count)
+            SidebarCountBadge(count: unreadCount)
         }
         .opacity(feed.isEnabled ? 1 : 0.5)
         .frame(maxWidth: .infinity, alignment: .leading)

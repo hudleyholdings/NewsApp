@@ -49,6 +49,8 @@ struct MainSplitView: View {
             return "Radio"
         case .radioCategory:
             return "Radio"
+        case .radioUserStations:
+            return "My Stations"
         }
     }
 
@@ -91,21 +93,25 @@ struct MainSplitView: View {
 
                 HeaderBarButton(
                     icon: "square.grid.2x2",
-                    label: "Cards",
-                    isActive: showingNewspaper
+                    label: cardsButtonLabel,
+                    isActive: showingNewspaper && !isRadioSelected
                 ) {
                     showingTVView = false
                     showingNewspaper = true
                 }
+                .disabled(isRadioSelected)
+                .opacity(isRadioSelected ? 0.35 : 1)
 
                 HeaderBarButton(
                     icon: "tv",
-                    label: "TV",
-                    isActive: showingTVView
+                    label: tvButtonLabel,
+                    isActive: showingTVView && !isRadioSelected
                 ) {
                     showingNewspaper = false
                     showingTVView = true
                 }
+                .disabled(isRadioSelected)
+                .opacity(isRadioSelected ? 0.35 : 1)
             }
             .padding(2)
             .background(Color.primary.opacity(0.04))
@@ -115,14 +121,21 @@ struct MainSplitView: View {
                 NotificationCenter.default.post(name: .openFeedManager, object: nil)
             }
 
-            HeaderBarButton(
-                icon: feedStore.isRefreshing ? nil : "arrow.clockwise",
-                label: "Refresh",
-                showProgress: feedStore.isRefreshing
-            ) {
-                Task { await feedStore.refreshAll() }
+            if feedStore.isRefreshing {
+                RefreshProgressChip(
+                    completed: feedStore.refreshCompletedCount,
+                    total: feedStore.refreshTotalCount
+                )
+            } else {
+                HeaderBarButton(
+                    icon: "arrow.clockwise",
+                    label: "Refresh"
+                ) {
+                    // User-initiated refresh = hard refresh (ignore stored
+                    // etag / last-modified) so 304-stuck feeds recover.
+                    Task { await feedStore.refreshAll(force: true) }
+                }
             }
-            .disabled(feedStore.isRefreshing)
 
             HeaderBarButton(
                 icon: "checkmark.circle",
@@ -135,6 +148,26 @@ struct MainSplitView: View {
     }
 
     // MARK: - Mark All as Read
+
+    /// Cards and TV layouts only make sense for article feeds. Radio selections
+    /// don't have articles to render, so we disable those toggles outright.
+    private var isRadioSelected: Bool {
+        guard let selection = feedStore.selectedSidebarItem else { return false }
+        switch selection {
+        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites, .radioUserStations:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var cardsButtonLabel: String {
+        isRadioSelected ? "Cards view isn't available for radio" : "Cards"
+    }
+
+    private var tvButtonLabel: String {
+        isRadioSelected ? "TV view isn't available for radio" : "TV"
+    }
 
     private var markAllAsReadUnreadCount: Int {
         feedStore.badgeCount(for: feedStore.selectedSidebarItem, mode: .unread)
@@ -179,7 +212,7 @@ struct MainSplitView: View {
             return feedStore.listName(for: id)
         case .category(let name):
             return name
-        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites:
+        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites, .radioUserStations:
             return nil
         }
     }
@@ -226,6 +259,9 @@ struct MainSplitView: View {
 
     private var hasRadioFavorites: Bool {
         !RadioStore.shared.favorites.isEmpty
+    }
+    private var hasUserStations: Bool {
+        !RadioStore.shared.userStations.isEmpty
     }
 
     /// When focus enters the article-list pane, make sure a row is selected so the user
@@ -275,7 +311,7 @@ struct MainSplitView: View {
     private func navigateUp() {
         switch focusedPane {
         case .sidebar:
-            feedStore.navigateSidebar(direction: -1, radioEnabled: settings.radioEnabled, hasLocation: hasLocation, hasRadioFavorites: hasRadioFavorites)
+            feedStore.navigateSidebar(direction: -1, settings: settings, radioEnabled: settings.radioEnabled, hasRadioFavorites: hasRadioFavorites, hasUserStations: hasUserStations)
         case .articleList:
             feedStore.navigateArticle(direction: -1)
         case .reader:
@@ -286,7 +322,7 @@ struct MainSplitView: View {
     private func navigateDown() {
         switch focusedPane {
         case .sidebar:
-            feedStore.navigateSidebar(direction: 1, radioEnabled: settings.radioEnabled, hasLocation: hasLocation, hasRadioFavorites: hasRadioFavorites)
+            feedStore.navigateSidebar(direction: 1, settings: settings, radioEnabled: settings.radioEnabled, hasRadioFavorites: hasRadioFavorites, hasUserStations: hasUserStations)
         case .articleList:
             feedStore.navigateArticle(direction: 1)
         case .reader:
@@ -352,6 +388,26 @@ struct MainSplitView: View {
             return false
         }
 
+        // ESC closes the Newspaper / TV / expanded reader overlays. We handle
+        // it here (above the `isMainView` gate) instead of via `.focusable() +
+        // .onKeyPress` on those views because focusable wraps an NSResponder
+        // that on macOS 26 absorbs mouse-wheel events meant for the inner
+        // ScrollView.
+        if event.keyCode == 53 {
+            if isReaderExpanded {
+                isReaderExpanded = false
+                return true
+            }
+            if showingNewspaper {
+                showingNewspaper = false
+                return true
+            }
+            if showingTVView {
+                showingTVView = false
+                return true
+            }
+        }
+
         guard isMainView else { return false }
 
         switch event.keyCode {
@@ -409,7 +465,7 @@ struct MainSplitView: View {
         case "o":
             feedStore.openCurrentArticleInBrowser()
         case "r":
-            Task { await feedStore.refreshAll() }
+            Task { await feedStore.refreshAll(force: true) }
         case "1":
             showingNewspaper = false
             showingTVView = false
@@ -512,6 +568,15 @@ struct MainSplitView: View {
                     if newValue != nil && !showReaderPane {
                         withAnimation { showReaderPane = true }
                     }
+                    // Stop any in-flight YouTube playback when the user jumps
+                    // to a different article so audio doesn't bleed across.
+                    NotificationCenter.default.post(name: .pauseAllYouTubePlayers, object: nil)
+                }
+                .onChange(of: isReaderExpanded) { _, _ in
+                    // Fullscreen toggle creates a second YouTubeEmbedPlayer in the
+                    // overlay; the underlying one is hidden but still playing audio.
+                    // Pause both so the user controls playback explicitly.
+                    NotificationCenter.default.post(name: .pauseAllYouTubePlayers, object: nil)
                 }
                 .onChange(of: feedStore.selectedSidebarItem) { _, _ in
                     // Mouse-clicking a sidebar row never updated `focusedPane`, so the
@@ -520,13 +585,21 @@ struct MainSplitView: View {
                     // change — keyboard sidebar nav is already in `.sidebar`, so this is
                     // idempotent there.
                     focusedPane = .sidebar
+                    // Cards / TV overlays render articles. Switching into a radio
+                    // selection while one of those overlays is up would leave the user
+                    // looking at stale article cards with no obvious way back, so
+                    // collapse to the standard three-pane layout.
+                    if isRadioSelected, showingNewspaper || showingTVView {
+                        showingNewspaper = false
+                        showingTVView = false
+                    }
                 }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openFeedManager)) { _ in
             showingFeedManager = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .refreshAllFeeds)) { _ in
-            Task { await feedStore.refreshAll() }
+            Task { await feedStore.refreshAll(force: true) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .previewReaderImage)) { notification in
             guard let url = notification.object as? URL else { return }
@@ -1098,6 +1171,50 @@ private struct WeatherDetailRow: View {
                     .foregroundStyle(.primary)
             }
         }
+    }
+}
+
+// MARK: - Refresh Progress Chip
+
+/// Small toolbar chip shown while a multi-feed refresh is in flight. Replaces the bare
+/// spinner with concrete progress ("423 / 1,104") so users with many feeds can see how
+/// far along they are. Backed by `FeedStore.refreshCompletedCount` /
+/// `refreshTotalCount`, both of which are throttled (~5/sec) by the refresh batcher.
+private struct RefreshProgressChip: View {
+    let completed: Int
+    let total: Int
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.85)
+                .frame(width: 12, height: 12)
+            if total > 0 {
+                Text(progressLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+        .fixedSize(horizontal: true, vertical: false)
+        .help(tooltipLabel)
+    }
+
+    /// Compact form ("72/1104") so the chip stays narrow enough to coexist with the
+    /// rest of the leading toolbar without forcing macOS to truncate it. Full count
+    /// with comma-formatted thousands separator lives in the hover tooltip.
+    private var progressLabel: String { "\(completed)/\(total)" }
+
+    private var tooltipLabel: String {
+        if total == 0 { return "Refreshing\u{2026}" }
+        let percent = Int((Double(completed) / Double(total)) * 100)
+        return "Refreshing \(completed.formatted(.number)) of \(total.formatted(.number)) feeds (\(percent)%)"
     }
 }
 

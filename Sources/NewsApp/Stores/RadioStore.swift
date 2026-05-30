@@ -7,11 +7,16 @@ final class RadioStore: ObservableObject {
 
     @Published var stations: [RadioStation] = []
     @Published var favorites: Set<UUID> = []
+    /// Stations the user has added via the in-app form. Persisted separately
+    /// from `stations` so reloading the bundled CSV never wipes them.
+    @Published private(set) var userStations: [RadioStation] = []
 
     private let favoritesKey = "radioFavorites"
+    private let userStationsKey = "userRadioStations"
 
     private init() {
         loadStations()
+        loadUserStations()
         loadFavorites()
     }
 
@@ -146,6 +151,96 @@ final class RadioStore: ObservableObject {
     private func saveFavorites() {
         if let data = try? JSONEncoder().encode(favorites) {
             UserDefaults.standard.set(data, forKey: favoritesKey)
+        }
+    }
+
+    // MARK: - User-added stations
+
+    /// Add a new user station. Returns the created station so callers can
+    /// immediately navigate to it / play it if they want.
+    @discardableResult
+    func addUserStation(
+        name: String,
+        streamURL: URL,
+        category: RadioCategory,
+        website: URL? = nil,
+        description: String = ""
+    ) -> RadioStation {
+        let station = RadioStation(
+            id: UUID(),
+            name: name,
+            category: category,
+            genre: category.displayName,
+            location: "",
+            country: "",
+            latitude: 0,
+            longitude: 0,
+            streamURL: streamURL,
+            website: website,
+            streamType: .liveStream,
+            bitrate: 128,
+            codec: "",
+            description: description,
+            notes: nil,
+            isUserAdded: true
+        )
+        userStations.append(station)
+        saveUserStations()
+        rebuildStations()
+        return station
+    }
+
+    /// Update an existing user station in place. No-op for bundled stations.
+    func updateUserStation(_ station: RadioStation) {
+        guard let index = userStations.firstIndex(where: { $0.id == station.id }) else { return }
+        var updated = station
+        updated.isUserAdded = true  // enforce — defends against external edits
+        userStations[index] = updated
+        saveUserStations()
+        rebuildStations()
+    }
+
+    /// Remove a user station and tidy up references (favorites, current playback).
+    func removeUserStation(_ station: RadioStation) {
+        guard let index = userStations.firstIndex(where: { $0.id == station.id }) else { return }
+        userStations.remove(at: index)
+        if favorites.contains(station.id) {
+            favorites.remove(station.id)
+            saveFavorites()
+        }
+        saveUserStations()
+        rebuildStations()
+    }
+
+    /// Combine bundled CSV stations with user-added ones. `loadStations()` puts
+    /// the bundled set into `stations` directly; this re-applies the merge any
+    /// time the user set changes.
+    private func rebuildStations() {
+        // The bundled stations are everything in `stations` minus any user-added
+        // entries already there. Stripping & re-appending avoids duplicates if
+        // this is called multiple times.
+        let bundled = stations.filter { !$0.isUserAdded }
+        stations = bundled + userStations
+    }
+
+    private func loadUserStations() {
+        guard let data = UserDefaults.standard.data(forKey: userStationsKey),
+              let decoded = try? JSONDecoder().decode([RadioStation].self, from: data) else {
+            return
+        }
+        // Force the flag on for everything we load from this key — defensive in
+        // case earlier data didn't include it.
+        userStations = decoded.map { station in
+            var copy = station
+            copy.isUserAdded = true
+            return copy
+        }
+        rebuildStations()
+    }
+
+    private func saveUserStations() {
+        if let data = try? JSONEncoder().encode(userStations) {
+            UserDefaults.standard.set(data, forKey: userStationsKey)
         }
     }
 }

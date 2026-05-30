@@ -803,8 +803,17 @@ private struct ListsManagementView: View {
             } else {
                 List {
                     ForEach(feedStore.lists) { list in
-                        ListManagementRow(list: list) {
-                            editingList = list
+                        ListManagementRow(
+                            list: list,
+                            onEdit: { editingList = list },
+                            onDelete: { feedStore.removeList(id: list.id) }
+                        )
+                        .contextMenu {
+                            Button("Edit") { editingList = list }
+                            Divider()
+                            Button("Delete", role: .destructive) {
+                                feedStore.removeList(id: list.id)
+                            }
                         }
                     }
                     .onDelete { offsets in
@@ -820,6 +829,7 @@ private struct ListsManagementView: View {
 private struct ListManagementRow: View {
     let list: UserList
     let onEdit: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -837,6 +847,13 @@ private struct ListManagementRow: View {
 
             Button("Edit", action: onEdit)
                 .buttonStyle(.bordered)
+            Button {
+                onDelete()
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.bordered)
+            .help("Delete List")
         }
         .padding(.vertical, 4)
     }
@@ -867,6 +884,14 @@ struct ListEditorView: View {
                 Text(isEditing ? "Edit List" : "New List")
                     .font(.title2.bold())
                 Spacer()
+                if isEditing {
+                    Button("Delete", role: .destructive) {
+                        feedStore.removeList(id: list.id)
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                }
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save") { save() }

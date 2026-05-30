@@ -1,5 +1,16 @@
 import Foundation
 
+struct CacheStorageUsage: Equatable {
+    var articleBytes: Int64
+    var networkCacheBytes: Int64
+
+    static let empty = CacheStorageUsage(articleBytes: 0, networkCacheBytes: 0)
+
+    var totalBytes: Int64 {
+        articleBytes + networkCacheBytes
+    }
+}
+
 struct PersistenceStore {
     private let directoryURL: URL
     private let feedsURL: URL
@@ -49,9 +60,30 @@ struct PersistenceStore {
         try? FileManager.default.removeItem(at: articlesURL)
     }
 
+    func articleCacheSizeBytes() -> Int64 {
+        allocatedFileSize(at: articlesURL)
+    }
+
     private func createDirectoryIfNeeded() {
         if !FileManager.default.fileExists(atPath: directoryURL.path) {
             try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         }
+    }
+
+    private func allocatedFileSize(at url: URL) -> Int64 {
+        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+        if let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey]) {
+            if let total = values.totalFileAllocatedSize {
+                return Int64(total)
+            }
+            if let file = values.fileAllocatedSize {
+                return Int64(file)
+            }
+        }
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attributes[.size] as? NSNumber {
+            return size.int64Value
+        }
+        return 0
     }
 }

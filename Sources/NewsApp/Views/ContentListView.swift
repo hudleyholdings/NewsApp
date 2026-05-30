@@ -24,7 +24,7 @@ struct ContentListView: View {
     private var contentType: ContentType {
         guard let selection = feedStore.selectedSidebarItem else { return .articles }
         switch selection {
-        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites:
+        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites, .radioUserStations:
             return .radio
         default:
             return .articles

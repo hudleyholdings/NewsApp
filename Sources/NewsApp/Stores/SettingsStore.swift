@@ -59,6 +59,7 @@ enum WeatherUnits: String, CaseIterable, Identifiable, Codable {
 enum SidebarSortMode: String, CaseIterable, Identifiable, Codable {
     case alphabetical
     case byUnreadCount
+    case custom
 
     var id: String { rawValue }
 
@@ -66,7 +67,28 @@ enum SidebarSortMode: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .alphabetical: return "Alphabetical"
         case .byUnreadCount: return "Unread Count"
+        case .custom: return "Custom Order"
         }
+    }
+}
+
+enum SidebarCustomOrderItemKind: String, Codable {
+    case list
+    case category
+}
+
+struct SidebarCustomOrderItem: Codable, Hashable, Identifiable {
+    var kind: SidebarCustomOrderItemKind
+    var value: String
+
+    var id: String { "\(kind.rawValue):\(value)" }
+
+    static func list(_ id: UUID) -> SidebarCustomOrderItem {
+        SidebarCustomOrderItem(kind: .list, value: id.uuidString)
+    }
+
+    static func category(_ name: String) -> SidebarCustomOrderItem {
+        SidebarCustomOrderItem(kind: .category, value: name)
     }
 }
 
@@ -159,6 +181,15 @@ final class SettingsStore: ObservableObject {
     /// Stored via `@AppStorage` as a String so `Set<String>` can persist across launches;
     /// access through `collapsedCategories` rather than this raw property.
     @AppStorage("collapsedCategoriesJSON") var collapsedCategoriesJSON: String = "[]"
+    /// JSON-encoded UUID strings for collapsed custom/user lists in the sidebar.
+    @AppStorage("collapsedListIDsJSON") var collapsedListIDsJSON: String = "[]"
+    /// JSON-encoded array of category names in the user's preferred order. Used when
+    /// `sidebarSortMode == .custom`. Survives changes to the sort mode so switching
+    /// back to Custom restores the last-saved order.
+    @AppStorage("customCategoryOrderJSON") var customCategoryOrderJSON: String = "[]"
+    /// JSON-encoded flat order for reorderable sidebar rows in Custom Order mode.
+    /// Smart lists stay fixed; user lists and feed categories share this order.
+    @AppStorage("customSidebarItemOrderJSON") var customSidebarItemOrderJSON: String = "[]"
 
     /// User-collapsed category names. Backed by `collapsedCategoriesJSON` so changes
     /// persist and trigger SwiftUI re-renders through `@AppStorage` observation.
@@ -179,6 +210,57 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    var collapsedListIDs: Set<UUID> {
+        get {
+            guard let data = collapsedListIDsJSON.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return Set(array.compactMap(UUID.init(uuidString:)))
+        }
+        set {
+            let sorted = newValue.map(\.uuidString).sorted()
+            if let data = try? JSONEncoder().encode(sorted),
+               let json = String(data: data, encoding: .utf8) {
+                collapsedListIDsJSON = json
+            }
+        }
+    }
+
+    /// Ordered list of category names for `.custom` sort. Categories not in the list
+    /// fall through to alphabetical (so newly-added categories don't disappear).
+    var customCategoryOrder: [String] {
+        get {
+            guard let data = customCategoryOrderJSON.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return array
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                customCategoryOrderJSON = json
+            }
+        }
+    }
+
+    var customSidebarItemOrder: [SidebarCustomOrderItem] {
+        get {
+            guard let data = customSidebarItemOrderJSON.data(using: .utf8),
+                  let array = try? JSONDecoder().decode([SidebarCustomOrderItem].self, from: data) else {
+                return []
+            }
+            return array
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                customSidebarItemOrderJSON = json
+            }
+        }
+    }
+
     func toggleCategoryCollapsed(_ category: String) {
         var current = collapsedCategories
         if current.contains(category) {
@@ -189,12 +271,30 @@ final class SettingsStore: ObservableObject {
         collapsedCategories = current
     }
 
+    func toggleListCollapsed(_ id: UUID) {
+        var current = collapsedListIDs
+        if current.contains(id) {
+            current.remove(id)
+        } else {
+            current.insert(id)
+        }
+        collapsedListIDs = current
+    }
+
     func collapseAllCategories(_ categories: [String]) {
         collapsedCategories = Set(categories)
     }
 
     func expandAllCategories() {
         collapsedCategories = []
+    }
+
+    func collapseAllLists(_ ids: [UUID]) {
+        collapsedListIDs = Set(ids)
+    }
+
+    func expandAllLists() {
+        collapsedListIDs = []
     }
 
     // Onboarding

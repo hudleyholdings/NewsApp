@@ -19,10 +19,9 @@ struct ExpandedReaderView: View {
 
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    if feedStore.isRefreshing {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    // Refresh progress already shows in the main toolbar's chip —
+                    // having a second persistent spinner up here looked broken on
+                    // long-running refreshes and crowded the YouTube reader layout.
 
                     SettingsLink(label: {
                         Label("Settings", systemImage: "gearshape")
@@ -56,6 +55,7 @@ struct ExpandedReaderView: View {
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
+                    .padding(.leading, 8)
                     .help("Return to three-pane view")
 
                     Button {

@@ -7,7 +7,19 @@ struct MasonryCardsView: View {
     @State private var selectedArticle: Article?
     @State private var showReader = false
     @State private var isReaderExpanded = false
+    /// Cached, deduplicated, grouped view data. Recomputed on a debounce (~1s) when
+    /// the underlying article corpus changes during a refresh — without this snapshot,
+    /// every per-flush invalidation would re-run the dedup + grouping passes on the
+    /// main thread and beach-ball the cards view.
+    @State private var snapshot: MasonrySnapshot = .empty
+    @State private var snapshotTask: Task<Void, Never>?
+    @State private var discoverTask: Task<Void, Never>?
     private let imagePrefetcher = ImagePrefetcher.shared
+
+    /// Upper bound on cards rendered per category section. The newspaper shows as
+    /// many stories as a category has, capped here so an enormous category (or the
+    /// all-feeds firehose) can't lay out thousands of cards in one section.
+    private static let maxStoriesPerCategory = 30
 
     var body: some View {
         Group {
@@ -24,11 +36,11 @@ struct MasonryCardsView: View {
                 }
             }
         }
-        .focusable()
-        .onKeyPress(.escape) {
-            isPresented = false
-            return .handled
-        }
+        // ESC routing for closing Newspaper view goes through the main
+        // keyboard monitor instead of `.focusable() + .onKeyPress`. The
+        // SwiftUI focusable modifier inserts an NSResponder above the
+        // ScrollView that on macOS 26 swallows mouse-wheel events — the
+        // symptom is "scrollbar drag works, keyboard works, wheel doesn't."
         .onChange(of: showReader) { _, new in
             if !new {
                 selectedArticle = nil
@@ -36,8 +48,29 @@ struct MasonryCardsView: View {
             }
         }
         .task {
+            rebuildSnapshot(immediate: true)
             prefetchImages()
-            await feedStore.discoverImages(for: allSortedArticles)
+            discoverImagesForSelection()
+        }
+        .onChange(of: feedStore.selectedSidebarItem) { _, _ in
+            rebuildSnapshot(immediate: true)
+            prefetchImages()
+            discoverImagesForSelection()
+        }
+        // No `onChange(of: refreshCompletedCount)`. Snapshot rebuilds during a
+        // refresh are intentionally skipped (the dictionary swap was what
+        // reset accumulated scroll-wheel deltas), and observing this @Published
+        // value here just invalidates the view body every refresh tick for
+        // nothing. The final update arrives via `lastRefreshTime` below.
+        .onChange(of: feedStore.lastRefreshTime) { _, _ in
+            rebuildSnapshot(immediate: true)
+            discoverImagesForSelection()
+        }
+        .onChange(of: settings.sidebarSortMode) { _, _ in
+            rebuildSnapshot(immediate: true)
+        }
+        .onChange(of: settings.customCategoryOrderJSON) { _, _ in
+            rebuildSnapshot(immediate: true)
         }
     }
 
@@ -49,14 +82,18 @@ struct MasonryCardsView: View {
             let padding: CGFloat = geo.size.width > 1200 ? 48 : (geo.size.width > 800 ? 32 : 20)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                // LazyVStack defers category-section construction until each section
+                // scrolls into view. With thousands of articles this is the difference
+                // between a long beach ball on first appear and a snappy initial paint.
+                LazyVStack(alignment: .leading, spacing: 0) {
                     // Newspaper Masthead
                     mastheadView
                         .padding(.horizontal, padding)
                         .padding(.top, 20)
 
-                    // Lead story section
-                    let allArticles = allSortedArticles
+                    // Lead story section — reads from the cached snapshot so the heavy
+                    // dedup + grouping work doesn't re-run on every view body pass.
+                    let allArticles = snapshot.allArticles
                     if !allArticles.isEmpty {
                         leadStorySection(
                             articles: allArticles,
@@ -68,7 +105,7 @@ struct MasonryCardsView: View {
                     }
 
                     // Category sections
-                    let groupedArticles = articlesGroupedByCategory
+                    let groupedArticles = snapshot.groupedByCategory
 
                     if groupedArticles.isEmpty && allArticles.isEmpty {
                         emptyState
@@ -158,7 +195,7 @@ struct MasonryCardsView: View {
             return feedStore.feedName(for: id) ?? "Feed"
         case .category(let name):
             return name
-        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites:
+        case .radioBrowse, .radioStation, .radioCategory, .radioFavorites, .radioUserStations:
             return "Radio"
         case .none:
             return "The Daily Digest"
@@ -240,12 +277,15 @@ struct MasonryCardsView: View {
     private func leadArticleView(_ article: Article) -> some View {
         Button { selectArticle(article) } label: {
             VStack(alignment: .leading, spacing: 10) {
-                // Lead image
+                // Lead image — fits within a height cap so the photo scales with
+                // window width without ever cropping top/bottom. At ~1600pt width
+                // a 3:2 photo lands at ~533pt tall; the cap stops a tall image
+                // from dominating the masthead.
                 if let url = article.imageURL {
                     LeadImageView(url: url)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 320)
-                        .clipped()
+                        .frame(maxHeight: 560)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
 
                 // Source
@@ -293,43 +333,34 @@ struct MasonryCardsView: View {
 
     private func secondaryArticleView(_ article: Article) -> some View {
         Button { selectArticle(article) } label: {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let source = feedStore.feedName(for: article.feedID) {
-                        Text(source.uppercased())
-                            .font(.system(size: settings.scaled(9), weight: .bold))
-                            .foregroundStyle(.tertiary)
-                            .tracking(1)
-                    }
-
-                    Text(article.title)
-                        .font(.system(size: settings.scaled(15), weight: .semibold, design: .serif))
-                        .foregroundStyle(.primary)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-
-                    if let summary = article.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.system(size: settings.scaled(12)))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-
-                    if let time = relativeTime(for: article) {
-                        Text(time)
-                            .font(.system(size: settings.scaled(10)))
-                            .foregroundStyle(.tertiary)
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                if let source = feedStore.feedName(for: article.feedID) {
+                    Text(source.uppercased())
+                        .font(.system(size: settings.scaled(9), weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .tracking(1)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Small thumbnail
-                if let url = article.imageURL {
-                    SmallImageView(url: url)
-                        .frame(width: 72, height: 72)
-                        .clipped()
+                Text(article.title)
+                    .font(.system(size: settings.scaled(15), weight: .semibold, design: .serif))
+                    .foregroundStyle(.primary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+
+                if let summary = article.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.system(size: settings.scaled(12)))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                if let time = relativeTime(for: article) {
+                    Text(time)
+                        .font(.system(size: settings.scaled(10)))
+                        .foregroundStyle(.tertiary)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
         }
         .buttonStyle(.plain)
@@ -379,7 +410,7 @@ struct MasonryCardsView: View {
 
             // Masonry grid of newspaper cards
             MasonryGrid(columns: columns, spacing: 20) {
-                ForEach(articles.prefix(12)) { article in
+                ForEach(articles.prefix(Self.maxStoriesPerCategory)) { article in
                     NewspaperCard(
                         article: article,
                         source: feedStore.feedName(for: article.feedID),
@@ -455,9 +486,7 @@ struct MasonryCardsView: View {
 
     // MARK: - Helpers
 
-    private var articleCount: Int {
-        feedStore.sortedArticles(for: feedStore.selectedSidebarItem).count
-    }
+    private var articleCount: Int { snapshot.allArticles.count }
 
     private var formattedDate: String {
         let formatter = DateFormatter()
@@ -465,14 +494,89 @@ struct MasonryCardsView: View {
         return formatter.string(from: Date())
     }
 
-    private var allSortedArticles: [Article] {
-        let sorted = feedStore.sortedArticles(for: feedStore.selectedSidebarItem)
-        var seen = Set<String>()
-        return sorted.compactMap { a in
-            let key = a.link?.absoluteString ?? a.externalID
-            guard !seen.contains(key) else { return nil }
-            seen.insert(key)
-            return a
+    // MARK: - Snapshot rebuild
+
+    private func rebuildSnapshot(immediate: Bool) {
+        // Skip non-immediate rebuilds while a refresh is in flight. Each rebuild
+        // swaps the snapshot dictionary, which redraws the LazyVStack and resets
+        // the underlying NSScrollView's accumulated wheel-scroll deltas — the
+        // visible symptom is "my scroll wheel does nothing while a refresh is
+        // running". The final immediate rebuild fires from `lastRefreshTime`'s
+        // `.onChange` once refresh completes.
+        //
+        // Important: this return must come BEFORE cancelling the in-flight task —
+        // otherwise selecting a category mid-refresh would queue an `immediate`
+        // rebuild, then a refresh tick's `immediate: false` call would cancel
+        // that work AND return early, leaving the snapshot empty.
+        if !immediate, feedStore.isRefreshing {
+            return
+        }
+        snapshotTask?.cancel()
+        snapshotTask = Task { [weak feedStore] in
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            guard !Task.isCancelled, let feedStore else { return }
+
+            // Pull the raw inputs on the main actor (FeedStore is @MainActor).
+            let raw: [Article]
+            let feedInfo: [UUID: (name: String, category: String?)]
+            let sortMode: SidebarSortMode
+            let customOrder: [String]
+            (raw, feedInfo, sortMode, customOrder) = await MainActor.run {
+                let selection = feedStore.selectedSidebarItem
+                let articles = feedStore.sortedArticles(for: selection)
+                let info = Dictionary(uniqueKeysWithValues: feedStore.feeds.map {
+                    ($0.id, (name: $0.name, category: $0.category))
+                })
+                return (articles, info, settings.sidebarSortMode, settings.customCategoryOrder)
+            }
+            guard !Task.isCancelled else { return }
+
+            // Heavy work off-main: dedup by link/externalID, group by category,
+            // sort + cap. With 50k+ articles this is where the beach ball lived.
+            var seen = Set<String>()
+            seen.reserveCapacity(raw.count)
+            var deduped: [Article] = []
+            deduped.reserveCapacity(raw.count)
+            for article in raw {
+                let key = article.link?.absoluteString ?? article.externalID
+                if seen.insert(key).inserted {
+                    deduped.append(article)
+                }
+            }
+            let remaining = deduped.dropFirst(4)
+            var groupedDict: [String: [Article]] = [:]
+            for article in remaining {
+                let info = feedInfo[article.feedID]
+                let category = info?.category ?? info?.name ?? "Other"
+                groupedDict[category, default: []].append(article)
+            }
+            // Decide the section order. Custom uses the user's saved drag-drop
+            // arrangement; otherwise keep the long-standing biggest-section-first
+            // heuristic that defines the newspaper look.
+            let categoryNames = Array(groupedDict.keys)
+            let orderedCategories: [String]
+            switch sortMode {
+            case .custom:
+                orderedCategories = CategorySorting.applyCustom(order: customOrder, to: categoryNames)
+            default:
+                orderedCategories = categoryNames.sorted {
+                    (groupedDict[$0]?.count ?? 0) > (groupedDict[$1]?.count ?? 0)
+                }
+            }
+            let grouped = orderedCategories.map { name in
+                (category: name, articles: Array((groupedDict[name] ?? []).prefix(Self.maxStoriesPerCategory)))
+            }
+
+            guard !Task.isCancelled else { return }
+            let newSnapshot = MasonrySnapshot(
+                allArticles: deduped,
+                groupedByCategory: grouped
+            )
+            await MainActor.run {
+                snapshot = newSnapshot
+            }
         }
     }
 
@@ -497,6 +601,26 @@ struct MasonryCardsView: View {
         imagePrefetcher.prefetch(urls: urls)
     }
 
+    /// Fill in missing images (og:image) for the *currently selected* articles, then
+    /// rebuild the snapshot so the lead story and cards actually render the images
+    /// that were just discovered.
+    ///
+    /// This reads from `sortedArticles(for:)` directly rather than `snapshot.allArticles`,
+    /// because `rebuildSnapshot` runs asynchronously — at the moment `.task`/`.onChange`
+    /// fire, the snapshot is still the previous (or empty) value. Passing the stale
+    /// snapshot here is why filtered category views often showed no hero image: the top
+    /// story's image only exists as an og:image, and discovery was never actually run on it.
+    private func discoverImagesForSelection() {
+        discoverTask?.cancel()
+        discoverTask = Task { [weak feedStore] in
+            guard let feedStore else { return }
+            let articles = feedStore.sortedArticles(for: feedStore.selectedSidebarItem)
+            let updated = await feedStore.discoverImages(for: articles)
+            guard !Task.isCancelled, updated > 0 else { return }
+            rebuildSnapshot(immediate: true)
+        }
+    }
+
     private static let timeFormatter: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .abbreviated
@@ -508,24 +632,16 @@ struct MasonryCardsView: View {
         return Self.timeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
-    private var articlesGroupedByCategory: [(category: String, articles: [Article])] {
-        let articles = allSortedArticles
+}
 
-        // Skip the first 4 (used in lead section)
-        let remaining = Array(articles.dropFirst(4))
+/// View-side snapshot of the cards layout. Both arrays are pre-deduplicated and
+/// pre-grouped; the view body just iterates them. Computed off the main thread by
+/// `rebuildSnapshot(immediate:)`.
+private struct MasonrySnapshot {
+    let allArticles: [Article]
+    let groupedByCategory: [(category: String, articles: [Article])]
 
-        var grouped = [String: [Article]]()
-        for article in remaining {
-            let category = feedStore.feedCategory(for: article.feedID)
-                ?? feedStore.feedName(for: article.feedID)
-                ?? "Other"
-            grouped[category, default: []].append(article)
-        }
-
-        return grouped
-            .sorted { $0.value.count > $1.value.count }
-            .map { ($0.key, Array($0.value.prefix(12))) }
-    }
+    static let empty = MasonrySnapshot(allArticles: [], groupedByCategory: [])
 }
 
 // MARK: - Lead Image View
@@ -535,14 +651,19 @@ private struct LeadImageView: View {
     @State private var image: NSImage?
 
     var body: some View {
-        ZStack {
-            Rectangle().fill(Color.secondary.opacity(0.06))
+        Group {
             if let img = image {
+                // Fit (not fill) so we never crop. The host's `.frame(maxHeight:)`
+                // caps the upper bound at very wide widths.
                 Image(nsImage: img)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: .fit)
             } else {
-                ProgressView().controlSize(.small)
+                ZStack {
+                    Rectangle().fill(Color.secondary.opacity(0.06))
+                    ProgressView().controlSize(.small)
+                }
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
             }
         }
         .task(id: url) {
@@ -604,7 +725,11 @@ struct NewspaperCard: View {
 
     private var newspaperContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Image (sharp corners, no rounding)
+            // Image (sharp corners, no rounding). A small inset around the
+            // frame keeps the card's dark chrome visible at the edges even
+            // when the image itself has a white/light background (e.g.,
+            // press-release logos), so the card boundary stays readable in
+            // dark mode.
             if let url = article.imageURL {
                 ZStack {
                     Rectangle().fill(Color.secondary.opacity(0.06))
@@ -616,8 +741,15 @@ struct NewspaperCard: View {
                         ProgressView().controlSize(.small)
                     }
                 }
-                .frame(height: 180)
+                // `maxWidth: .infinity` makes the ZStack honor the masonry
+                // column's proposed width instead of reporting the image's
+                // intrinsic size (wide logos at 180pt tall were ~430pt wide,
+                // bleeding past the card boundary). The follow-up `.clipped`
+                // then clips the image to the actual column width.
+                .frame(maxWidth: .infinity, maxHeight: 180)
                 .clipped()
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
             }
 
             // Text content
@@ -674,7 +806,7 @@ struct NewspaperCard: View {
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
         .overlay(
             Rectangle()
-                .stroke(.primary.opacity(isHovered ? 0.15 : 0.06), lineWidth: 1)
+                .stroke(.primary.opacity(isHovered ? 0.22 : 0.14), lineWidth: 1)
         )
         .opacity(isHovered ? 0.85 : 1.0)
         .animation(.easeOut(duration: 0.12), value: isHovered)
@@ -986,6 +1118,15 @@ final class ImagePrefetcher: ObservableObject {
 
     func image(for url: URL) -> NSImage? {
         cache.object(forKey: url as NSURL)
+    }
+
+    func clearCache() {
+        cache.removeAllObjects()
+        queue.sync {
+            inFlightURLs.removeAll()
+            failedURLs.removeAll()
+        }
+        loadedCount = 0
     }
 
     func hasFailed(_ url: URL) -> Bool {

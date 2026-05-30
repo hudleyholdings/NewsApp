@@ -1,6 +1,6 @@
 import Foundation
 
-struct RadioStation: Identifiable, Hashable {
+struct RadioStation: Identifiable, Hashable, Codable {
     let id: UUID
     let name: String
     let category: RadioCategory
@@ -16,8 +16,13 @@ struct RadioStation: Identifiable, Hashable {
     let codec: String
     let description: String
     let notes: String?
+    /// `true` when the user added this station via the in-app form, `false` for
+    /// bundled stations loaded from `radio-stations.csv`. Drives the
+    /// edit/delete affordances in the station list and prevents accidentally
+    /// "deleting" a bundled entry.
+    var isUserAdded: Bool = false
 
-    enum RadioStreamType: String {
+    enum RadioStreamType: String, Codable {
         case liveStream = "live_stream"
         case aggregator = "aggregator"
     }
@@ -38,7 +43,7 @@ struct RadioStation: Identifiable, Hashable {
     }
 }
 
-enum RadioCategory: String, CaseIterable, Hashable {
+enum RadioCategory: String, CaseIterable, Hashable, Codable {
     case newsTalk = "News/Talk"
     case music = "Music"
     case sports = "Sports"

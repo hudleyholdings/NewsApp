@@ -18,6 +18,10 @@ final class FeedDiscovery: @unchecked Sendable {
     func discover(from input: String) async throws -> (siteURL: URL, feeds: [DiscoveredFeed]) {
         let normalizedURL = normalizeInput(input)
 
+        if let youtubeFeed = await discoverYouTubeFeed(from: normalizedURL) {
+            return (normalizedURL, [youtubeFeed])
+        }
+
         // First, check if the input URL itself is a valid feed
         if let feed = await verifyFeed(url: normalizedURL) {
             return (normalizedURL, [feed])
@@ -166,6 +170,82 @@ final class FeedDiscovery: @unchecked Sendable {
             }
             return verified
         }
+    }
+
+    private func discoverYouTubeFeed(from url: URL) async -> DiscoveredFeed? {
+        if let playlistID = youtubePlaylistID(in: url) {
+            return await verifyYouTubePlaylistFeed(playlistID: playlistID)
+        }
+
+        guard isYouTubeChannelURL(url) else { return nil }
+
+        if let channelID = youtubeChannelID(in: url),
+           let feed = await verifyYouTubeFeed(channelID: channelID) {
+            return feed
+        }
+
+        guard let html = try? await fetchHTML(url: url) else { return nil }
+        let channelID = firstMatch(in: html, pattern: #"/feeds/videos\.xml\?channel_id=([A-Za-z0-9_-]+)"#)
+            ?? firstMatch(in: html, pattern: #""externalId":"([A-Za-z0-9_-]+)""#)
+        guard let channelID else { return nil }
+        return await verifyYouTubeFeed(channelID: channelID)
+    }
+
+    private func isYouTubeChannelURL(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(),
+              host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com" else {
+            return false
+        }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !path.isEmpty else { return false }
+        let first = path.split(separator: "/").first.map(String.init) ?? ""
+        return first.hasPrefix("@") || first == "channel" || first == "c" || first == "user"
+    }
+
+    private func youtubePlaylistID(in url: URL) -> String? {
+        guard let host = url.host?.lowercased(),
+              host == "youtube.com" || host == "www.youtube.com" || host == "m.youtube.com",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let isPlaylistPage = path == "playlist"
+            || path == "watch"
+            || path.split(separator: "/").first == "playlist"
+        guard isPlaylistPage else { return nil }
+        return components.queryItems?.first(where: { $0.name == "list" })?.value
+    }
+
+    private func youtubeChannelID(in url: URL) -> String? {
+        let parts = url.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .split(separator: "/")
+            .map(String.init)
+        guard parts.count >= 2, parts[0] == "channel" else { return nil }
+        return parts[1]
+    }
+
+    private func verifyYouTubeFeed(channelID: String) async -> DiscoveredFeed? {
+        guard let feedURL = URL(string: "https://www.youtube.com/feeds/videos.xml?channel_id=\(channelID)") else {
+            return nil
+        }
+        return await verifyFeed(url: feedURL)
+    }
+
+    private func verifyYouTubePlaylistFeed(playlistID: String) async -> DiscoveredFeed? {
+        guard let feedURL = URL(string: "https://www.youtube.com/feeds/videos.xml?playlist_id=\(playlistID)") else {
+            return nil
+        }
+        return await verifyFeed(url: feedURL)
+    }
+
+    private func firstMatch(in string: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: string, range: NSRange(string.startIndex..., in: string)),
+              let range = Range(match.range(at: 1), in: string) else {
+            return nil
+        }
+        return String(string[range])
     }
 
     private func extractFeedTitle(from data: Data) -> String? {
