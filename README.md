@@ -1,12 +1,14 @@
 # News App: RSS Reader & More
 
-A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed formats, plus live global event data from GDELT and public prediction-market data from Polymarket.
+A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed formats, plus live global event data from GDELT, public prediction-market data from Polymarket, Reddit, YouTube, and live radio.
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)
 ![Swift 6.2](https://img.shields.io/badge/Swift-6.2-orange)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
 
-![News App screenshot](screenshot.png)
+> Read RSS, Atom, JSON feeds, GDELT topics, and Polymarket prediction data in a clean, modern, fast interface.
+
+![News App showing the three-pane reader with sidebar, article list, and reader view](screenshot.png)
 
 **[Download on the Mac App Store](https://apps.apple.com/us/app/news-app-rss-reader-more/id6768790083?mt=12)**
 
@@ -18,13 +20,15 @@ A native macOS news reader built with SwiftUI. Supports RSS, Atom, and JSON Feed
 - **Built-in reader mode** -- clean article view with configurable fonts, spacing, and width
 - **GDELT integration** -- browse global news events by topic (politics, tech, science, climate, etc.) in 13 languages
 - **Polymarket integration** -- view public probability, volume, and price-history data
+- **Reddit & YouTube** -- read subreddits and watch channels inline
 - **Masonry/newspaper layout** -- a card-based grid view inspired by print newspapers
 - **TV View** -- a broadcast-style presentation with Ken Burns image animations and lower-third graphics
-- **Radio** -- stream news/talk radio stations from a built-in directory
+- **Radio** -- stream news/talk stations from a built-in directory, or add your own custom streams
+- **Themes** -- typography presets with live previews (serif, mono, rounded, and more)
+- **Custom lists** -- organize feeds into your own collections, plus Unread and Bookmarks smart lists
 - **Content blocking** -- built-in ad blocker for the web view
-- **Keyboard navigation** -- arrow keys to move between sidebar, article list, and reader panes
+- **Keyboard navigation** -- arrow keys move through the sidebar, article list, and reader panes
 - **Dark mode** -- follows system appearance or set manually
-- **Custom lists** -- organize articles into bookmarks and custom collections
 - **Auto-refresh** -- configurable background refresh interval
 - **Local storage** -- all data stays on your Mac in the app's sandboxed container (no servers, no analytics)
 
